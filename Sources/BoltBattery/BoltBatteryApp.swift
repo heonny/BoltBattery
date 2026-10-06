@@ -137,7 +137,7 @@ struct PopoverView: View {
             HStack(alignment: .top, spacing: 8) {
                 DeviceSection(model: model)
                 Button(action: openSettings) {
-                    Image(systemName: "line.3.horizontal")
+                    Image(systemName: "gearshape")
                         .font(.system(size: 14))
                         .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
@@ -195,12 +195,14 @@ struct DeviceSection: View {
                 }
             }
             ForEach(model.displayDevices) { device in
-                HStack(alignment: .firstTextBaseline) {
-                    Text(device.name).font(.headline)
-                    Spacer()
-                    Text(Self.percent(for: device)).font(.title3.monospacedDigit())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(device.name)
+                        .font(.headline)
+                        .frame(minHeight: 28)
+                    (Text(Self.percent(for: device)).monospacedDigit().foregroundColor(.primary)
+                        + Text(" · " + Self.detail(for: device)).foregroundColor(.secondary))
+                        .font(.caption)
                 }
-                Text(Self.detail(for: device)).font(.caption).foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
