@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var subscription: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        MouseIcon.dumpPreviewIfRequested()
         // Info.plist의 LSUIElement와 같은 효과. 번들 없이 swift run으로 띄워도 Dock 아이콘이 생기지 않게 한다.
         NSApplication.shared.setActivationPolicy(.accessory)
 
@@ -64,24 +65,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateButton() {
         guard let button = statusItem?.button else { return }
-        button.image = NSImage(systemSymbolName: MenuBarIcon.symbol(for: model.primary), accessibilityDescription: "배터리")
+        button.image = MouseIcon.image(for: model.primary)
         button.title = " " + MenuBarIcon.title(for: model.primary)
     }
 }
 
 enum MenuBarIcon {
-    static func symbol(for device: DeviceStatus?) -> String {
-        guard let battery = device?.battery else { return "battery.0" }
-        if battery.isCharging { return "battery.100.bolt" }
-        switch battery.percent {
-        case 88...: return "battery.100"
-        case 63...: return "battery.75"
-        case 38...: return "battery.50"
-        case 13...: return "battery.25"
-        default: return "battery.0"
-        }
-    }
-
     static func title(for device: DeviceStatus?) -> String {
         guard let battery = device?.battery else { return "--" }
         return "\(battery.percent)%"
