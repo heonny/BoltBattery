@@ -1,0 +1,17 @@
+# SwiftPM / swiftc
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store
+
+# 배포 산출물
+*.dmg
+*.zip

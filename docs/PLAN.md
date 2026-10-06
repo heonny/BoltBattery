@@ -1,0 +1,107 @@
+# Bolt Battery — 개발 계획
+
+## 프로젝트 개요
+
+Logi Bolt 리시버로 연결된 Logitech 마우스의 배터리를 macOS 메뉴바에 표시하는 Swift 전용 앱.
+Options+와 공존하며, 마우스 상태를 절대 바꾸지 않는 읽기 전용 앱이고, CPU·전력 사용을 최소화하는 것이 핵심 목표.
+
+### 기술 결정 사항
+
+- 언어/UI: Swift + SwiftUI `MenuBarExtra`. HID 통신은 IOKit(`IOHIDManager`) 직접 사용. 서드파티 의존성 없음.
+- 대상: Bolt 리시버(VID `0x046D`, PID `0xC548`)의 벤더 인터페이스(usage page `0xFF00`). Unifying(`0xC52B`)은 같은 코드로 추가 지원 가능하도록 PID를 목록으로 관리.
+- 장치는 반드시 일반 모드(`kIOHIDOptionsTypeNone`)로 열고, 독점 모드(`kIOHIDOptionsTypeSeizeDevice`)는 절대 사용하지 않음.
+- 최소 지원 macOS: 13 이상 (`MenuBarExtra`, `SMAppService` 사용).
+
+### 참고 자료
+
+- Solaar: HID++ 프로토콜 레퍼런스. 함수 번호·바이트 위치는 반드시 여기서 교차 확인.
+- MXLightkeeper: Swift + Bolt 리시버 통신 구현 참고.
+- mx-battery: 잠자기/깨우기 후 IOKit 핸들 재구성 처리 참고.
+
+---
+
+## Phase 0. 공존 검증 스파이크 (반나절)
+
+프로젝트 전체의 리스크를 먼저 제거하는 단계. Options+를 실행한 상태에서 동작하는 CLI 테스트 프로그램을 만든다.
+
+- 리시버의 벤더 인터페이스를 일반 모드로 열고, 슬롯 1~6에 대해 Root 기능(`0x0000`)으로 배터리 기능 인덱스를 조회한 뒤 배터리 값을 한 번 읽어 출력한다.
+- 입력 모니터링 권한이 실제로 필요한지도 함께 확인한다.
+
+**완료 기준**
+- Options+ 실행 중에도 장치 열기에 성공하고 배터리 %가 정상 출력될 것.
+- Options+ 앱에서도 배터리·설정이 계속 정상 동작할 것.
+- 실패 시 원인(열기 실패 / 응답 누락)을 기록하고 계획을 재검토한다.
+
+**결과 (2026-10-06, 단일 파일 스파이크로 확인 후 Phase 1 `batteryctl`로 대체)**
+- Options+ 에이전트 실행 중에 `kIOHIDOptionsTypeNone`으로 열어 슬롯 2의 MX Master 3S(HID++ 4.5)에서 `0x1004`로 90% 읽기 성공. Options+ 에이전트는 계속 실행됨.
+- 입력 모니터링 권한은 `denied` 상태였지만 벤더 인터페이스(`0xFF00`) 열기와 입력 리포트 수신 모두 정상. 즉 이 앱에는 입력 모니터링 권한이 필요 없다 → Phase 5 범위 축소 가능.
+- 빈 슬롯은 핑에 HID++ 1.0 에러 `0x09`(RESOURCE_ERROR)로 응답. Solaar가 빈 슬롯으로 보는 `0x08`과 다르므로 빈 슬롯과 절전 장치는 핑만으로 구분 불가.
+
+## Phase 1. HID++ 코어 모듈 (1~2일)
+
+UI와 분리된 Swift Package(`HIDPPKit`)로 만든다. CLI와 앱이 같은 코드를 사용.
+
+- **전송 계층**: 롱 리포트(report ID `0x11`, 20바이트) 형식 `[reportID, deviceIndex, featureIndex, (function << 4) | swID, params...]`으로 요청을 보내고, 입력 리포트 콜백으로 응답을 받는다. 콜백 기반 응답을 `async/await`로 감싸고, 요청마다 타임아웃(예: 1초)을 둔다.
+- **응답 구분**: 고유한 소프트웨어 ID를 하나 정해 사용(0은 장치 발신 알림용이므로 제외, Options+와 겹치지 않을 값). deviceIndex·featureIndex·function·swID가 모두 일치하는 응답만 처리하고 나머지는 무시.
+- **에러 처리**: featureIndex `0xFF` 에러 응답을 파싱. BUSY나 타임아웃은 짧은 백오프 후 최대 2~3회 재시도.
+- **기능 조회**: Root 기능으로 기능 ID → 인덱스를 찾고, 결과를 장치별로 캐시.
+- **배터리**: `0x1004`(Unified Battery) 우선, 없으면 `0x1000`(Battery Status)로 폴백. 결과는 `{ percent, isCharging, isApproximate }` 구조체로 반환. `0x1000`은 단계형 값만 주므로 근사치 플래그 사용.
+- **장치 열거**: 슬롯 1~6을 조회해 응답하는 장치만 목록화. 가능하면 장치 이름도 조회.
+- **테스트**: 전송 계층을 프로토콜로 추상화해서, 실제 장치 없이 바이트 픽스처로 파싱·응답 매칭·에러 처리를 단위 테스트.
+
+**완료 기준**
+- CLI(`batteryctl`)에서 연결된 모든 Bolt 기기의 이름과 배터리가 출력될 것.
+- 단위 테스트 통과.
+
+**결과 (2026-10-06)**
+- `Package.swift`: `HIDPPKit` 라이브러리 + `batteryctl` 실행 타겟 + `HIDPPKitTests`. Swift 6 언어 모드, macOS 13+.
+- 계층: `HIDReportChannel`(바이트 채널 프로토콜, IOKit 구현 `IOHIDReportChannel`) → `HIDPPClient`(프레임·응답 매칭·에러·1초 타임아웃·BUSY/타임아웃 3회 재시도, 전용 직렬 큐) → `Receiver` 액터(핑·이름·배터리·기능 인덱스 캐시) → `BatteryReading`.
+- 소프트웨어 ID `0x09` 고정. 핑은 재시도하지 않음(생존 확인).
+- `swift test` 10개 통과(가짜 채널로 프레임 레이아웃·매칭·에러·타임아웃·재시도 정책·배터리 디코딩·리시버 열거). `swift run batteryctl` → `slot 2: MX Master 3S  HID++ 4.5  90%`.
+- 미결: 빈 슬롯과 절전 장치를 핑만으로 구분 못 함(Phase 2에서 리시버 페어링 레지스터로 보완 검토). 슬롯에 다른 장치가 페어링되면 `Receiver.forgetFeatures(slot:)` 호출 필요(Phase 2 핫플러그에서 연결).
+
+## Phase 2. 생명주기와 예외 처리 (1일)
+
+- **핫플러그**: `IOHIDManager`의 장치 연결/해제 콜백으로 리시버 탈착을 감지하고 자동 재연결.
+- **잠자기/깨우기**: `NSWorkspace.didWakeNotification` 수신 시 HID 핸들을 버리고 새로 열어 재조회. (mx-battery에서 실제 발생했던 버그이므로 필수)
+- **마우스 절전 상태**: 응답이 없으면 에러로 표시하지 말고 마지막 값을 "마지막 확인 시각"과 함께 유지.
+
+**완료 기준**
+- 리시버 뽑았다 꽂기, 맥 잠자기 후 깨우기, 마우스 전원 껐다 켜기 세 시나리오에서 수동 개입 없이 복구.
+
+## Phase 3. 메뉴바 UI (반나절)
+
+- `Info.plist`에 `LSUIElement = YES`로 Dock 아이콘 숨김.
+- 메뉴바: 배터리 아이콘 + %. 충전 중이면 아이콘 변경.
+- 메뉴: 기기별 이름·%·마지막 갱신 시각, "로그인 시 실행" 토글(`SMAppService.mainApp`), 종료 버튼.
+- 선택 사항: 임계치(예: 20%) 이하에서 한 번만 알림(`UserNotifications`).
+
+**완료 기준**
+- 메뉴바 표시와 메뉴 동작 확인, 로그인 시 자동 실행 동작.
+
+## Phase 4. 저전력 최적화 (반나절~1일)
+
+- **이벤트 우선**: 장치가 swID 0으로 보내는 배터리 변화 알림을 받아 즉시 갱신. 폴링은 보조 수단.
+- **폴링**: 10분 간격, 타이머 `tolerance`를 넉넉히(간격의 20~50%) 설정해 macOS가 다른 작업과 묶어 깨울 수 있게.
+- HID 호출은 메인 스레드 밖에서 처리하고, 값이 바뀌었을 때만 UI 상태 갱신.
+
+**완료 기준**
+- 활동 모니터 "에너지 영향"이 유휴 시 거의 0으로 유지될 것.
+- Instruments로 확인했을 때 불필요한 주기적 깨어남이 없을 것.
+
+## Phase 5. 권한 처리 (반나절)
+
+- 실행 시 `IOHIDCheckAccess`로 입력 모니터링 권한 확인, 없으면 `IOHIDRequestAccess`로 요청.
+- 권한 거부 상태에서는 메뉴에 안내 문구와 "시스템 설정 열기" 버튼 표시.
+
+**완료 기준**
+- 새 사용자 계정에서 처음 실행해도 안내를 따라 정상 동작에 도달.
+
+## Phase 6. 배포 (반나절~1일)
+
+- Hardened Runtime 활성화, Developer ID로 서명, `notarytool`로 공증, 스테이플링 후 DMG 생성.
+- GitHub Releases 업로드, 선택적으로 Homebrew Cask 추가.
+- 빌드~공증 과정을 스크립트 또는 GitHub Actions로 자동화.
+
+**완료 기준**
+- 다른 맥에서 다운로드 후 Gatekeeper 경고 없이 실행.
