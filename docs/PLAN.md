@@ -93,7 +93,7 @@ UI와 분리된 Swift Package(`HIDPPKit`)로 만든다. CLI와 앱이 같은 코
 - 메뉴바: 레벨별 `battery.*` 심볼, 충전 중 `battery.100.bolt`, 텍스트 `NN%`. 메뉴: 장치별 이름·%·마지막 확인 시각(절전 표시), 지금 갱신, 로그인 시 실행, 종료(⌘Q).
 - `NSApplication.setActivationPolicy(.accessory)`를 코드에서도 호출해 `swift run`으로 띄워도 Dock 아이콘이 없다.
 - 확인: 번들 실행 후 메뉴바에 아이콘과 `90%` 표시(스크린샷). 메뉴 내용과 로그인 시 실행 토글은 사용자가 직접 확인.
-- 저전력 알림(20% 이하 1회)은 선택 사항이라 미구현. 번들 ID는 임시로 `dev.heonny.BoltBattery`.
+- 저전력 알림(20% 이하 1회)은 선택 사항이라 미구현. 번들 ID는 `com.heonny.BoltBattery`(2026-10-06 확정).
 
 ## Phase 4. 저전력 최적화 (반나절~1일)
 
@@ -135,3 +135,9 @@ UI와 분리된 Swift Package(`HIDPPKit`)로 만든다. CLI와 앱이 같은 코
 
 **완료 기준**
 - 다른 맥에서 다운로드 후 Gatekeeper 경고 없이 실행.
+
+**결과 (2026-10-06, ad-hoc 경로까지 확인 · Developer ID 경로는 인증서 대기)**
+- `scripts/make-app.sh`: release는 arm64+x86_64 유니버설(경로는 `--show-bin-path`로 질의). `SIGN_IDENTITY`가 있으면 Hardened Runtime + timestamp로 서명, 없으면 ad-hoc.
+- `scripts/release.sh`: `NOTARY_PROFILE`만 있고 identity가 없으면 즉시 실패. release 빌드 → 번들 검증 → (프로필 있으면 앱을 zip으로 먼저 공증·스테이플링, 오프라인 첫 실행 대비) → `hdiutil`로 `.build/BoltBattery-<버전>.dmg`(Applications 심볼릭 링크 포함) → identity가 있으면 DMG 서명 → `NOTARY_PROFILE`이 있으면 `notarytool submit --wait` + `stapler staple` + `spctl` 검증.
+- 확인: ad-hoc으로 DMG 생성, 마운트 후 실행, 번들 ID `com.heonny.BoltBattery`. `spctl`은 ad-hoc이라 예상대로 거부.
+- 배포 방식 결정(2026-10-06): 개인용이라 Developer ID 계정을 쓰지 않는다. 로컬에서 `scripts/release.sh`(ad-hoc)로 만들어 쓴다. 절차는 `README.md`. Developer ID·공증 경로는 스크립트에 남겨 두었고 인증서와 `notarytool` 프로필만 있으면 그대로 쓸 수 있다. GitHub Releases·Homebrew Cask·Actions는 하지 않는다.

@@ -9,7 +9,7 @@
 	<key>CFBundleExecutable</key>
 	<string>BoltBattery</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.heonny.BoltBattery</string>
+	<string>com.heonny.BoltBattery</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -20,6 +20,8 @@
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
