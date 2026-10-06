@@ -9,12 +9,14 @@ import Testing
     defer { defaults.removePersistentDomain(forName: suite) }
     let settings = AppSettings(defaults: defaults)
     #expect(settings.displayMode == .iconAndPercent)
-    #expect(settings.fileLogging)
+    #expect(!settings.fileLogging)
     settings.displayMode = .percentOnly
-    settings.fileLogging = false
+    settings.fileLogging = true
     let restored = AppSettings(defaults: defaults)
     #expect(restored.displayMode == .percentOnly)
-    #expect(!restored.fileLogging)
+    #expect(restored.fileLogging)
+    restored.fileLogging = false
+    #expect(!AppSettings(defaults: defaults).fileLogging)
     defaults.set("unknown-mode", forKey: "displayMode")
     #expect(AppSettings(defaults: defaults).displayMode == .iconAndPercent)
 }
@@ -48,7 +50,11 @@ import Testing
     #expect(settings.displayMode == .percentOnly)
     #expect(menu.items.filter { $0.representedObject is String && $0.state == .on }.count == 1)
     #expect(menu.items[percent].state == .on)
-    let logging = menu.items.firstIndex { $0.title == "파일 로그 쓰기" }!
+    let logging = menu.items.firstIndex { $0.title == "진단 로그 쓰기" }!
+    #expect(menu.items[logging].state == .off)
+    menu.performActionForItem(at: logging)
+    #expect(settings.fileLogging)
+    #expect(menu.items[logging].state == .on)
     menu.performActionForItem(at: logging)
     #expect(!settings.fileLogging)
     #expect(menu.items[logging].state == .off)

@@ -26,6 +26,6 @@ final class AppSettings: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode") ?? "") ?? .iconAndPercent
-        fileLogging = defaults.object(forKey: "fileLogging") as? Bool ?? true
+        fileLogging = defaults.object(forKey: "fileLogging") as? Bool ?? false
     }
 }

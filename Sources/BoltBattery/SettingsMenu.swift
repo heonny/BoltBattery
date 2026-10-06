@@ -30,7 +30,7 @@ final class SettingsMenuController: NSObject {
             item.state = settings.displayMode == mode ? .on : .off
         }
         menu.addItem(.separator())
-        add("파일 로그 쓰기", action: #selector(toggleLogging(_:)), to: menu).state = settings.fileLogging ? .on : .off
+        add("진단 로그 쓰기", action: #selector(toggleLogging(_:)), to: menu).state = settings.fileLogging ? .on : .off
         add("로그 폴더 열기…", action: #selector(openLogs), to: menu)
         add("로그인 시 실행", action: #selector(toggleLaunchAtLogin), to: menu).state = launchAtLogin ? .on : .off
         menu.addItem(.separator())
