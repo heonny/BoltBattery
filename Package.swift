@@ -11,8 +11,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "HIDPPKit"),
+        .target(name: "BatteryHistory"),
         .executableTarget(name: "batteryctl", dependencies: ["HIDPPKit"]),
-        .executableTarget(name: "BoltBattery", dependencies: ["HIDPPKit"]),
+        .executableTarget(name: "BoltBattery", dependencies: ["HIDPPKit", "BatteryHistory"]),
         .testTarget(name: "HIDPPKitTests", dependencies: ["HIDPPKit"]),
+        .testTarget(name: "BatteryHistoryTests", dependencies: ["BatteryHistory"]),
     ]
 )
