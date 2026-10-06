@@ -27,8 +27,15 @@ final class BatteryModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.pollInterval, tolerance: Self.pollTolerance)
                 await monitor.refresh()
+                await self.sync()
             }
         }
+    }
+
+    /// `BatteryMonitor`는 값이 그대로면 알리지 않으므로, 폴링 뒤 "마지막 확인" 시각만이라도 메뉴에 반영한다.
+    private func sync() async {
+        let latest = await monitor.devices
+        if latest != devices { devices = latest }
     }
 
     /// 메뉴바에 보여줄 장치: 배터리 값이 있는 첫 장치.
@@ -37,8 +44,10 @@ final class BatteryModel: ObservableObject {
     }
 
     func refreshNow() {
-        let monitor = monitor
-        Task { await monitor.refresh() }
+        Task {
+            await monitor.refresh()
+            await sync()
+        }
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -49,6 +58,10 @@ final class BatteryModel: ObservableObject {
             // 번들 없이 swift run으로 띄우면 LaunchServices에 등록할 앱이 없어 실패한다.
             launchAtLoginError = error.localizedDescription
         }
-        launchAtLogin = SMAppService.mainApp.status == .enabled
+        let status = SMAppService.mainApp.status
+        launchAtLogin = status == .enabled
+        if status == .requiresApproval {
+            launchAtLoginError = "시스템 설정 > 일반 > 로그인 항목에서 허용이 필요합니다"
+        }
     }
 }

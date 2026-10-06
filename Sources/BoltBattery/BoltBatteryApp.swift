@@ -49,7 +49,7 @@ struct BatteryMenu: View {
         }
         ForEach(model.devices) { device in
             Text(Self.line(for: device))
-            Text(Self.detail(for: device)).font(.caption)
+            Text(Self.detail(for: device))
         }
         Divider()
         Button("지금 갱신") { model.refreshNow() }
@@ -58,7 +58,7 @@ struct BatteryMenu: View {
             set: { model.setLaunchAtLogin($0) }
         ))
         if let error = model.launchAtLoginError {
-            Text(error).font(.caption)
+            Text(error)
         }
         Divider()
         Button("종료") { NSApplication.shared.terminate(nil) }
