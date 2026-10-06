@@ -20,8 +20,11 @@ swift build "$@"
 BIN=$(swift build "$@" --show-bin-path)/BoltBattery
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/BoltBattery"
 cp Packaging/Info.plist "$APP/Contents/Info.plist"
+sh scripts/make-icon.sh
+cp .build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 if [ "$SIGN_IDENTITY" = "-" ]; then
     codesign --force --sign - "$APP"
