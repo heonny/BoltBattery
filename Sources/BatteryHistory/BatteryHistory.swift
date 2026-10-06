@@ -16,7 +16,7 @@ public struct BatterySample: Equatable, Sendable {
 }
 
 public enum HistoryRange: CaseIterable, Sendable, Identifiable {
-    /// 최근 24시간, 원본 값
+    /// 최근 12시간, 10분 구간별 마지막 값
     case day
     /// 최근 7일, 시간 평균
     case week
@@ -27,7 +27,7 @@ public enum HistoryRange: CaseIterable, Sendable, Identifiable {
 
     public var window: TimeInterval {
         switch self {
-        case .day: 86_400
+        case .day: 12 * 3_600
         case .week: 7 * 86_400
         case .quarter: 84 * 86_400
         }
@@ -56,6 +56,8 @@ public struct ChartPoint: Equatable, Sendable, Identifiable {
 /// 파일 오류는 로그만 남기고 삼킨다. 기록은 보조 기능이라 앱을 죽일 이유가 없다.
 public actor BatteryHistory {
     public static let retention: TimeInterval = 183 * 86_400
+    public static let recordingInterval: TimeInterval = 600
+    private var latestReading: [UInt8: Date] = [:]
 
     public private(set) var samples: [BatterySample] = []
     private let fileURL: URL
@@ -74,26 +76,68 @@ public actor BatteryHistory {
     /// 파일을 읽어 메모리에 올리고 보존 기간을 넘긴 줄을 잘라낸다. 깨진 줄과 하루 이상 미래인 줄(시계 오설정 흔적)은 건너뛴다.
     public func load(now: Date = Date()) {
         samples = []
+        latestReading = [:]
         guard let data = try? Data(contentsOf: fileURL) else { return }
         let text = String(decoding: data, as: UTF8.self)
         let horizon = now.addingTimeInterval(86_400)
-        samples = text.split(separator: "\n").compactMap { Self.parse($0) }.filter { $0.time <= horizon }.sorted { $0.time < $1.time }
-        prune(now: now, force: true)
+        let parsed = text.split(separator: "\n").compactMap { Self.parse($0) }.filter { $0.time <= horizon }
+        latestReading = Dictionary(grouping: parsed, by: \.slot).mapValues { $0.map(\.time).max()! }
+        samples = Self.coalesced(parsed).filter { $0.time >= now.addingTimeInterval(-Self.retention) }
+        if samples != parsed { writeSamples() }
     }
 
-    /// 같은 슬롯에 같은 시각의 샘플이 이미 있으면 기록하지 않는다(폴링마다 같은 읽기값이 다시 오는 경우).
+    /// 같은 10분 구간은 최신 잔량으로 교체하고 충전 기록은 유지한다.
     @discardableResult
     public func record(_ sample: BatterySample) -> Bool {
-        if let last = samples.last(where: { $0.slot == sample.slot }), last.time == sample.time { return false }
-        samples.append(sample)
-        appendLine(Self.line(sample))
+        if let latest = latestReading[sample.slot], sample.time < latest { return false }
+        latestReading[sample.slot] = sample.time
+        let time = Self.intervalStart(sample.time)
+        if let index = samples.lastIndex(where: { $0.slot == sample.slot && $0.time == time }) {
+            let replacement = BatterySample(time: time, slot: sample.slot, percent: sample.percent,
+                                            isCharging: samples[index].isCharging || sample.isCharging)
+            guard replacement != samples[index] else { return false }
+            samples[index] = replacement
+            writeSamples()
+        } else {
+            let rounded = BatterySample(time: time, slot: sample.slot, percent: sample.percent, isCharging: sample.isCharging)
+            samples.append(rounded)
+            samples.sort { $0.time == $1.time ? $0.slot < $1.slot : $0.time < $1.time }
+            appendLine(Self.line(rounded))
+        }
         prune(now: sample.time, force: false)
         return true
+    }
+
+    public static func intervalStart(_ time: Date) -> Date {
+        Date(timeIntervalSince1970: floor(time.timeIntervalSince1970 / recordingInterval) * recordingInterval)
+    }
+
+    private struct IntervalKey: Hashable {
+        let time: Date
+        let slot: UInt8
+    }
+
+    private static func coalesced(_ samples: [BatterySample]) -> [BatterySample] {
+        var intervals: [IntervalKey: BatterySample] = [:]
+        let ordered = samples.enumerated().sorted {
+            $0.element.time == $1.element.time ? $0.offset < $1.offset : $0.element.time < $1.element.time
+        }
+        for (_, sample) in ordered {
+            let key = IntervalKey(time: intervalStart(sample.time), slot: sample.slot)
+            intervals[key] = BatterySample(time: key.time, slot: key.slot, percent: sample.percent,
+                                          isCharging: sample.isCharging || intervals[key]?.isCharging == true)
+        }
+        return intervals.values.sorted { $0.time == $1.time ? $0.slot < $1.slot : $0.time < $1.time }
+    }
+
+    private func writeSamples() {
+        write(samples.map(Self.line).joined(separator: "\n") + (samples.isEmpty ? "" : "\n"))
     }
 
     /// 파일을 비운다. 비우기에 실패하면 디스크 상태를 다시 읽어 UI가 거짓으로 비어 보이지 않게 한다.
     public func clear() {
         samples = []
+        latestReading = [:]
         if !write("") {
             try? FileManager.default.removeItem(at: fileURL)
             load()
@@ -116,9 +160,14 @@ public actor BatteryHistory {
         _ samples: [BatterySample], slot: UInt8?, range: HistoryRange, now: Date = Date(), calendar: Calendar = .current
     ) -> [ChartPoint] {
         let start = now.addingTimeInterval(-range.window)
-        let inRange = samples.filter { $0.time >= start && (slot == nil || $0.slot == slot) }
+        let inRange = coalesced(samples).filter { $0.time >= intervalStart(start) && $0.time <= now && (slot == nil || $0.slot == slot) }
         guard let unit = range.bucket else {
-            return inRange.map { ChartPoint(time: $0.time, percent: Double($0.percent), isCharging: $0.isCharging) }
+            // CSV timestamps have second precision, so separate readings can share a chart identity after reload.
+            var latestByTime: [Date: BatterySample] = [:]
+            for sample in inRange { latestByTime[sample.time] = sample }
+            return latestByTime.keys.sorted().compactMap { time in
+                latestByTime[time].map { ChartPoint(time: time, percent: Double($0.percent), isCharging: $0.isCharging) }
+            }
         }
         var buckets: [Date: (sum: Int, count: Int, charging: Bool)] = [:]
         for s in inRange {
