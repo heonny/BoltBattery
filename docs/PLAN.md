@@ -141,3 +141,21 @@ UI와 분리된 Swift Package(`HIDPPKit`)로 만든다. CLI와 앱이 같은 코
 - `scripts/release.sh`: `NOTARY_PROFILE`만 있고 identity가 없으면 즉시 실패. release 빌드 → 번들 검증 → (프로필 있으면 앱을 zip으로 먼저 공증·스테이플링, 오프라인 첫 실행 대비) → `hdiutil`로 `.build/BoltBattery-<버전>.dmg`(Applications 심볼릭 링크 포함) → identity가 있으면 DMG 서명 → `NOTARY_PROFILE`이 있으면 `notarytool submit --wait` + `stapler staple` + `spctl` 검증.
 - 확인: ad-hoc으로 DMG 생성, 마운트 후 실행, 번들 ID `com.heonny.BoltBattery`. `spctl`은 ad-hoc이라 예상대로 거부.
 - 배포 방식 결정(2026-10-06): 개인용이라 Developer ID 계정을 쓰지 않는다. 로컬에서 `scripts/release.sh`(ad-hoc)로 만들어 쓴다. 절차는 `README.md`. Developer ID·공증 경로는 스크립트에 남겨 두었고 인증서와 `notarytool` 프로필만 있으면 그대로 쓸 수 있다. GitHub Releases·Homebrew Cask·Actions는 하지 않는다.
+
+---
+
+## 추가 기능. 배터리 추이 (2026-10-06)
+
+사용자 요청: 10분 간격으로 로컬 파일에 적재하고, RunCat Neo처럼 팝오버 안에 시간별·일간·주간 세 탭의 차트를 보여준다. 보존 6개월, 지우기 기능, 숫자만 저장, 파일 문제로 앱이 죽지 않을 것. 압축은 "별로면 안 해도 됨".
+
+**결정**
+- 저장: `~/Library/Application Support/BoltBattery/history.csv`, 한 줄에 `초 단위 시각,슬롯,퍼센트,충전(0/1)`. 장치 이름은 저장하지 않는다. 압축은 하지 않는다. 6개월치가 1MB 미만이고, 압축 파일은 덧붙일 수 없어 매번 다시 써야 해 깨질 위험만 는다.
+- 적재: 폴링(10분)·이벤트로 `lastUpdated`가 바뀐 읽기값만 기록. 절전 중엔 새 값이 없으니 기록하지 않는다(선이 끊긴다).
+- 보존: 시작 시 6개월 초과분을 잘라 다시 쓴다. 기록 중에는 하루 이상 초과한 게 있을 때만 다시 써서 10분마다 전체를 다시 쓰지 않는다.
+- 탭: 시간별 = 최근 24시간 원본, 일간 = 최근 7일 시간 평균, 주간 = 최근 12주 일 평균. 충전 중 샘플이 있는 구간은 초록 점.
+- UI(여러 번 실물 확인 끝에 확정): `NSStatusItem` + 시스템 `NSMenu`, 메뉴 항목 하나에 SwiftUI 뷰(`NSHostingView`)를 통째로 넣는다. macOS 26부터 시스템 메뉴가 Liquid Glass라 배터리 메뉴와 같은 유리·그림자·모서리를 OS가 그린다. 거쳐 간 실패: `MenuBarExtra .window`와 `NSPopover`는 불투명 재질을 밑에 깔아 글래스가 가려지고, 직접 만든 투명 `NSPanel`은 창 그림자가 둥근 유리가 아닌 창 사각형을 따라 네모로 비쳤다. 차트만 불투명 카드에 올린다. 버튼은 텍스트 없는 정사각 아이콘(갱신·지우개·로그인 시 실행 토글 `autostartstop`·종료), 평소엔 배경 없고 호버 시 같은 색 불투명도만 올린다(스타일을 갈아끼우면 번쩍임). 호버 설명은 툴팁 상자 대신 버튼 줄 가운데에 뜬다. "기록 지우기"는 같은 자리의 체크/X 두 단계.
+- 스크린샷 확인용 실행 인자 `--debug-panel`: 시작 직후 메뉴를 연다. `BOLT_DEBUG_HOVER=<symbol>`: 그 버튼을 호버 상태로 그린다.
+- 깊은 절전 중인 마우스는 시작 시 핑에 답하지 않아 목록에 없다. 장치가 하나도 없는 동안은 30초마다 다시 찾는다.
+- 파일 오류는 모두 로그만 남기고 삼킨다. 깨진 줄은 건너뛴다.
+
+**구조**: `BatteryHistory` 라이브러리 타겟(순수 로직, 테스트 6개) + 앱의 `BatteryModel`이 기록·차트 데이터·지우기를 담당.

@@ -16,6 +16,9 @@ open /Applications/BoltBattery.app
 ad-hoc 서명이라 이 Mac에서만 열린다. 다른 Mac에서 쓰려면 그 Mac에서 다시 빌드한다.
 메뉴의 "로그인 시 실행"은 `/Applications`에 복사한 뒤에 켠다.
 
+배터리 추이는 10분마다 `~/Library/Application Support/BoltBattery/history.csv`에 숫자만 적재되고 6개월 뒤 잘린다.
+팝오버의 "기록 지우기"로 비울 수 있다.
+
 ## 개발
 
 ```sh

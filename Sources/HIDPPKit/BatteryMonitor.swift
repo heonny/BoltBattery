@@ -14,6 +14,15 @@ public struct DeviceStatus: Equatable, Sendable, Identifiable {
 
     public var id: String { Self.id(receiverID: receiverID, slot: slot) }
 
+    public init(receiverID: UInt64, slot: UInt8, name: String, battery: BatteryReading?, lastUpdated: Date?, isReachable: Bool) {
+        self.receiverID = receiverID
+        self.slot = slot
+        self.name = name
+        self.battery = battery
+        self.lastUpdated = lastUpdated
+        self.isReachable = isReachable
+    }
+
     static func id(receiverID: UInt64, slot: UInt8) -> String { "\(receiverID):\(slot)" }
 }
 
