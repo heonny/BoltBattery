@@ -85,3 +85,30 @@ private func batteryDevice(_ percent: Int, charging: Bool = false, reachable: Bo
     await notifier.process([batteryDevice(5)])
     #expect(delivery.sent == 1)
 }
+
+@Test(arguments: [10, 20, 30]) @MainActor
+func batteryRecoveryRearmsNotificationsAcrossRestarts(threshold: Int) async {
+    let suite = UUID().uuidString
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let settings = AppSettings(defaults: defaults)
+    settings.lowBatteryThreshold = threshold
+    let delivery = NotificationStub()
+    let notifier = LowBatteryNotifier(settings: settings, defaults: defaults, delivery: delivery)
+    await notifier.process([batteryDevice(threshold)])
+    #expect(delivery.sent == 1)
+
+    let restarted = LowBatteryNotifier(settings: settings, defaults: defaults, delivery: delivery)
+    await restarted.process([batteryDevice(threshold + 4)])
+    await restarted.process([batteryDevice(threshold)])
+    await restarted.process([batteryDevice(100, reachable: false)])
+    await restarted.process([batteryDevice(threshold)])
+    #expect(delivery.sent == 1)
+
+    await restarted.process([batteryDevice(threshold + 5)])
+    #expect(delivery.sent == 1)
+    let recovered = LowBatteryNotifier(settings: settings, defaults: defaults, delivery: delivery)
+    await recovered.process([batteryDevice(threshold)])
+    await recovered.process([batteryDevice(threshold - 1)])
+    #expect(delivery.sent == 2)
+}

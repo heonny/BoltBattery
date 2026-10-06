@@ -35,6 +35,7 @@ final class LowBatteryNotifier {
     private var cycles: [String: Int] = [:]
     private let log = DiagnosticLogger(category: "notifications")
     private static let historyKey = "lowBatteryNotifiedDevices"
+    private static let recoveryMargin = 5
 
     init(settings: AppSettings, defaults: UserDefaults = .standard,
          delivery: any BatteryNotificationDelivery = SystemBatteryNotifications()) {
@@ -60,12 +61,14 @@ final class LowBatteryNotifier {
             guard device.isReachable, device.lastUpdated != nil, let battery = device.battery else { continue }
             // Receiver registry IDs change across reconnects; retain suppression by paired slot and name.
             let key = "\(device.slot):\(device.name)"
-            if battery.isCharging {
+            let threshold = settings.lowBatteryThreshold
+            // Recover after charging while the app was closed, without rearming on small fluctuations.
+            let hasRecovered = threshold > 0 && battery.percent >= threshold + Self.recoveryMargin
+            if battery.isCharging || hasRecovered {
                 cycles[key, default: 0] += 1
                 if notified.remove(key) != nil { persist() }
                 continue
             }
-            let threshold = settings.lowBatteryThreshold
             guard threshold > 0, battery.percent <= threshold,
                   !notified.contains(key), !pending.contains(key) else { continue }
             pending.insert(key)
