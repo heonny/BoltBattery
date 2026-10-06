@@ -25,6 +25,7 @@ cp "$BIN" "$APP/Contents/MacOS/BoltBattery"
 cp Packaging/Info.plist "$APP/Contents/Info.plist"
 sh scripts/make-icon.sh
 cp .build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp LICENSE "$APP/Contents/Resources/LICENSE"
 
 if [ "$SIGN_IDENTITY" = "-" ]; then
     codesign --force --sign - "$APP"

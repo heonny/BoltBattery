@@ -52,6 +52,7 @@ jobs:
         shell: bash
         run: |
           test -s .build/BoltBattery.app/Contents/Resources/AppIcon.icns
+          cmp LICENSE .build/BoltBattery.app/Contents/Resources/LICENSE
           architectures=" $(lipo -archs .build/BoltBattery.app/Contents/MacOS/BoltBattery) "
           [[ "$architectures" == *" arm64 "* ]]
           [[ "$architectures" == *" x86_64 "* ]]
