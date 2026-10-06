@@ -4,7 +4,10 @@
 
 Bolt 리시버 연결 Logitech 마우스의 배터리를 표시하는 개인용 macOS 메뉴바 앱. 1차 구현은 완료했으며 이후 작업은 현재 기능의 유지보수와 사용자가 요청한 개선에 집중한다. 완료한 Phase 계획을 다시 실행하지 않는다.
 
-- `README.md`: 현재 기능, 설치·실행·문제 해결 안내
+- `README.md`: 프로젝트 소개, 주요 기능과 문서 진입점
+- `docs/INSTALLATION.md`: 첫 설치·실행·소스 빌드 안내
+- `docs/SUPPORT.md`: 문제 해결과 진단 정보·로그·CSV를 이용한 버그 제보
+- `docs/DATA-AND-PERMISSIONS.md`: 권한, 저장 위치·파일·보관 기간과 삭제 방법
 - `docs/PHILOSOPHY.md`: 제품·디자인·색상·성능·시각 검증 원칙
 - `CLAUDE.md`: 개발 제약과 구조, 검증 방법
 
