@@ -121,6 +121,12 @@ UI와 분리된 Swift Package(`HIDPPKit`)로 만든다. CLI와 앱이 같은 코
 **완료 기준**
 - 새 사용자 계정에서 처음 실행해도 안내를 따라 정상 동작에 도달.
 
+**결과 (2026-10-06, 계획 축소)**
+- Phase 0 실측대로 벤더 인터페이스는 입력 모니터링 권한 없이 열리므로 시작 시 `IOHIDRequestAccess`를 부르지 않는다. 불필요한 권한을 요구하지 않는 쪽이 사용자에게도 낫다.
+- `ReceiverMonitor.state` 스트림(`ReceiverState`): `noReceiver` / `openFailed(reason, needsInputMonitoring)` / `ready(count)`. 열기 실패한 리시버는 `failed`에 보관하고 `retry()`로 다시 연다. `kIOReturnNotPermitted`일 때만 입력 모니터링 안내.
+- 메뉴: 리시버 없음 → "Bolt 리시버가 연결되지 않았습니다", 열기 실패 → 사유 + (권한이면) "입력 모니터링 권한 허용…"(`IOHIDRequestAccess` + 시스템 설정 열기) + "다시 시도", 정상인데 장치 없음 → "응답하는 장치가 없습니다".
+- 확인: 정상 경로는 실기기로 확인(메뉴바 85%). 열기 실패 경로는 이 환경에서 재현 불가(권한이 필요 없음). 리시버 없음 문구는 리시버를 뽑아 확인 가능.
+
 ## Phase 6. 배포 (반나절~1일)
 
 - Hardened Runtime 활성화, Developer ID로 서명, `notarytool`로 공증, 스테이플링 후 DMG 생성.

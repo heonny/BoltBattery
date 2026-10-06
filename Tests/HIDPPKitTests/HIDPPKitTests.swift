@@ -1,4 +1,5 @@
 import Foundation
+import IOKit
 import Testing
 @testable import HIDPPKit
 
@@ -378,4 +379,15 @@ final class Snapshots<T: Sendable>: @unchecked Sendable {
     #expect(await waitUntil { await monitor.devices[0].isReachable })
     #expect(await monitor.devices[0].name == "MX Anywhere 3S")
     #expect(await monitor.devices[0].battery?.percent == 40)
+}
+
+// MARK: - ReceiverMonitor
+
+@Test func openFailureOffersInputMonitoringOnlyWhenNotPermitted() {
+    #expect(ReceiverMonitor.openFailedState(for: HIDPPError.ioError(kIOReturnNotPermitted))
+        == .openFailed(reason: "IOKit 0xe00002e2", needsInputMonitoring: true))
+    #expect(ReceiverMonitor.openFailedState(for: HIDPPError.ioError(kIOReturnNoDevice))
+        == .openFailed(reason: "IOKit 0xe00002c0", needsInputMonitoring: false))
+    #expect(ReceiverMonitor.openFailedState(for: HIDPPError.timeout)
+        == .openFailed(reason: "timeout", needsInputMonitoring: false))
 }

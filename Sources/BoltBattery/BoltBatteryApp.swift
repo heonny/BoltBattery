@@ -44,8 +44,19 @@ struct BatteryMenu: View {
     @ObservedObject var model: BatteryModel
 
     var body: some View {
-        if model.devices.isEmpty {
-            Text("연결된 장치 없음")
+        switch model.receiverState {
+        case .noReceiver:
+            Text("Bolt 리시버가 연결되지 않았습니다")
+        case .openFailed(let reason, let needsInputMonitoring):
+            Text("리시버를 열 수 없습니다 (\(reason))")
+            if needsInputMonitoring {
+                Button("입력 모니터링 권한 허용…") { model.requestInputMonitoring() }
+            }
+            Button("다시 시도") { model.retryReceivers() }
+        case .ready:
+            if model.devices.isEmpty {
+                Text("연결된 장치 없음")
+            }
         }
         ForEach(model.devices) { device in
             Text(Self.line(for: device))

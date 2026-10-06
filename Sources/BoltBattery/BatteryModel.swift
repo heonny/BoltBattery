@@ -1,11 +1,13 @@
-import Foundation
+import AppKit
 import HIDPPKit
+import IOKit.hid
 import ServiceManagement
 
 /// UI가 보는 상태. HID 작업은 전부 HIDPPKit의 액터·큐에서 돌고, 여기에는 결과만 메인 액터로 들어온다.
 @MainActor
 final class BatteryModel: ObservableObject {
     @Published private(set) var devices: [DeviceStatus] = []
+    @Published private(set) var receiverState: ReceiverState = .noReceiver
     @Published private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published private(set) var launchAtLoginError: String?
 
@@ -22,6 +24,7 @@ final class BatteryModel: ObservableObject {
         let monitor = monitor
         let hotplug = hotplug
         Task { for await devices in updates { self.devices = devices } }
+        Task { for await state in hotplug.state { self.receiverState = state } }
         Task { await monitor.run(receivers: hotplug.receivers) }
         Task {
             while !Task.isCancelled {
@@ -47,6 +50,18 @@ final class BatteryModel: ObservableObject {
         Task {
             await monitor.refresh()
             await sync()
+        }
+    }
+
+    func retryReceivers() {
+        hotplug.retry()
+    }
+
+    /// 입력 모니터링은 평소엔 필요 없다(Phase 0 실측). 거부로 열기에 실패한 경우에만 시스템 프롬프트를 띄우고 설정으로 보낸다.
+    func requestInputMonitoring() {
+        IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
         }
     }
 
