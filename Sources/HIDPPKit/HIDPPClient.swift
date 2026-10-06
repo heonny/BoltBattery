@@ -42,6 +42,52 @@ public enum HIDPP {
     }
 }
 
+/// 장치나 리시버가 스스로 보낸 리포트. base.py make_notification(): sub_id(byte 2)의 최상위 비트가 0이고,
+/// HID++ 2.0 기능 이벤트면 funcSW(byte 3)의 swID 니블이 0, HID++ 1.0 리시버 알림이면 sub_id가 0x40~0x7F.
+/// sub_id 0 + address 하위 니블 0은 no-op라 버린다. 구형 1.0 커스텀 배터리 이벤트(0x07/0x0D/0x17)는 받지 않는다.
+public struct HIDPPNotification: Sendable, Equatable {
+    public let reportID: UInt8
+    public let deviceIndex: UInt8
+    /// 2.0: 기능 인덱스, 1.0: sub id
+    public let subID: UInt8
+    /// 2.0: (function << 4) | 0, 1.0: address
+    public let address: UInt8
+    public let data: [UInt8]
+
+    init?(report r: [UInt8]) {
+        guard Self.isNotification(r) else { return nil }
+        reportID = r[0]
+        deviceIndex = r[1]
+        subID = r[2]
+        address = r[3]
+        data = Array(r[4...])
+    }
+
+    /// 할당 없이 바이트만 보고 판정한다. 휠·버튼 이벤트가 쏟아질 때 HID 큐에서 싸게 버리기 위한 것.
+    static func isNotification(_ r: [UInt8]) -> Bool {
+        guard r.count >= 4, r[2] & 0x80 == 0 else { return false }
+        let subID = r[2], address = r[3]
+        if subID == 0, address & 0x0F == 0 { return false }
+        return subID >= 0x40 || address & 0x0F == 0
+    }
+
+    /// HID++ 1.0 리시버 알림(sub id 0x40~0x7F). 2.0 기능 인덱스는 그보다 작다.
+    public var isReceiverNotification: Bool { subID >= 0x40 }
+
+    /// 2.0 기능 이벤트의 function 번호. 1.0 알림에는 의미 없다.
+    public var function: UInt8 { address >> 4 }
+
+    /// HID++ 1.0 리시버 알림 0x41(common.Notification.DJ_PAIRING, 장치 연결/해제)이면 링크 수립 여부.
+    /// notifications.py: data[0] & 0x40이 서면 끊김, address 0x02(27MHz 구형)는 항상 연결.
+    /// Phase 4 실측(Bolt, MX Master 3S): 전원 끔 `42 34 b0`, 켬 `02 34 b0`.
+    public var linkEstablished: Bool? {
+        guard subID == 0x41, let flags = data.first else { return nil }
+        return address == 0x02 || flags & 0x40 == 0
+    }
+
+    static func watchKey(slot: UInt8, featureIndex: UInt8) -> UInt16 { UInt16(slot) << 8 | UInt16(featureIndex) }
+}
+
 /// HID++ 요청/응답 매칭 계층. 요청은 전용 직렬 큐에서 한 번에 하나씩 처리된다.
 /// 응답은 (deviceIndex, featureIndex, function|swID)가 모두 일치할 때만 받아들이고 나머지(알림, 타 클라이언트 응답)는 무시한다.
 public final class HIDPPClient: @unchecked Sendable {
@@ -50,6 +96,9 @@ public final class HIDPPClient: @unchecked Sendable {
     private let requestQueue = DispatchQueue(label: "bolt-battery.hidpp.request")
     private let lock = NSLock()
     private var waiter: (([UInt8]) -> Bool)?
+    private var onNotification: (@Sendable (HIDPPNotification) -> Void)?
+    /// 통과시킬 2.0 기능 이벤트 (slot, featureIndex). Options+가 돌려둔 버튼·휠 이벤트는 초당 수십 개라 HID 큐에서 바로 버린다.
+    private var watchedFeatures: Set<UInt16> = []
 
     /// - Parameter timeout: 요청당 응답 대기. Solaar는 4초(base.py DEFAULT_TIMEOUT)지만 PLAN대로 1초 + 재시도로 간다.
     public init(channel: HIDReportChannel, timeout: TimeInterval = 1.0) throws {
@@ -119,9 +168,40 @@ public final class HIDPPClient: @unchecked Sendable {
         return try result.get()
     }
 
+    /// 요청 응답이 아닌 리포트를 받을 콜백. HID 큐에서 불린다.
+    /// HID++ 1.0 리시버 알림(sub id 0x40~0x7F)은 항상, 2.0 기능 이벤트는 `watchNotifications`로 등록한 것만 전달한다.
+    public func setNotificationHandler(_ handler: @escaping @Sendable (HIDPPNotification) -> Void) {
+        lock.lock()
+        onNotification = handler
+        lock.unlock()
+    }
+
+    public func watchNotifications(slot: UInt8, featureIndex: UInt8) {
+        lock.lock()
+        watchedFeatures.insert(HIDPPNotification.watchKey(slot: slot, featureIndex: featureIndex))
+        lock.unlock()
+    }
+
+    public func unwatchNotifications(slot: UInt8) {
+        lock.lock()
+        watchedFeatures = watchedFeatures.filter { $0 >> 8 != UInt16(slot) }
+        lock.unlock()
+    }
+
     private func handle(_ report: [UInt8]) {
         lock.lock()
-        defer { lock.unlock() }
-        if let waiter, waiter(report) { self.waiter = nil }
+        if let waiter, waiter(report) {
+            self.waiter = nil
+            lock.unlock()
+            return
+        }
+        guard let handler = onNotification, HIDPPNotification.isNotification(report),
+              report[2] >= 0x40 || watchedFeatures.contains(HIDPPNotification.watchKey(slot: report[1], featureIndex: report[2]))
+        else {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+        if let notification = HIDPPNotification(report: report) { handler(notification) }
     }
 }

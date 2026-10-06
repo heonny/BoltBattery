@@ -1,11 +1,16 @@
 import Foundation
 
 // hidpp20_constants.SupportedFeature
-public enum FeatureID: UInt16, Sendable {
+public enum FeatureID: UInt16, Sendable, CaseIterable {
     case root = 0x0000
     case deviceName = 0x0005
     case batteryStatus = 0x1000
     case unifiedBattery = 0x1004
+    case reprogControlsV4 = 0x1B04
+    case wirelessDeviceStatus = 0x1D4B
+    case smartShift = 0x2110
+    case hiresWheel = 0x2121
+    case thumbWheel = 0x2150
 }
 
 public struct PairedDevice: Equatable, Sendable {
@@ -24,6 +29,10 @@ public actor Receiver {
     public nonisolated let id: UInt64
     public nonisolated let productID: Int
     public nonisolated let productName: String
+    /// 배터리 기능 이벤트와 리시버의 연결/해제 알림. 소비자는 하나여야 한다.
+    public nonisolated let notifications: AsyncStream<HIDPPNotification>
+    /// 이벤트를 받아볼 기능. 인덱스를 알게 되는 즉시 클라이언트 필터에 등록한다.
+    private static let notifiedFeatures: Set<FeatureID> = [.unifiedBattery, .batteryStatus]
     private let client: HIDPPClient
     private var featureIndexCache: [UInt8: [FeatureID: UInt8]] = [:]
 
@@ -43,6 +52,9 @@ public actor Receiver {
         self.productID = productID
         self.productName = productName
         client = try HIDPPClient(channel: channel, timeout: timeout)
+        let (stream, continuation) = AsyncStream<HIDPPNotification>.makeStream(bufferingPolicy: .bufferingNewest(16))
+        notifications = stream
+        client.setNotificationHandler { continuation.yield($0) }
     }
 
     /// 슬롯 1~6을 핑해서 응답한 장치만 반환한다.
@@ -104,15 +116,22 @@ public actor Receiver {
 
     /// hidpp20.py FeaturesArray: ROOT fn0 + featureId(BE16) -> [index, flags, version]. index 0이면 미지원.
     /// 슬롯별로 캐시한다. 슬롯에 다른 장치가 페어링되면 `forgetFeatures(slot:)`로 비워야 한다.
-    func featureIndex(slot: UInt8, _ feature: FeatureID) async throws -> UInt8? {
+    public func featureIndex(slot: UInt8, _ feature: FeatureID) async throws -> UInt8? {
         if let cached = featureIndexCache[slot]?[feature] { return cached == 0 ? nil : cached }
         let id = feature.rawValue
         let r = try await client.request(deviceIndex: slot, feature: 0x00, function: 0, params: [UInt8(id >> 8), UInt8(id & 0xFF)])
         featureIndexCache[slot, default: [:]][feature] = r[0]
+        if r[0] != 0, Self.notifiedFeatures.contains(feature) { client.watchNotifications(slot: slot, featureIndex: r[0]) }
         return r[0] == 0 ? nil : r[0]
+    }
+
+    /// 알림의 기능 인덱스를 캐시로 역조회한다. 아직 조회한 적 없는 기능이면 nil.
+    public func cachedFeature(slot: UInt8, index: UInt8) -> FeatureID? {
+        featureIndexCache[slot]?.first { $0.value == index }?.key
     }
 
     public func forgetFeatures(slot: UInt8) {
         featureIndexCache[slot] = nil
+        client.unwatchNotifications(slot: slot)
     }
 }

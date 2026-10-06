@@ -105,6 +105,14 @@ UI와 분리된 Swift Package(`HIDPPKit`)로 만든다. CLI와 앱이 같은 코
 - 활동 모니터 "에너지 영향"이 유휴 시 거의 0으로 유지될 것.
 - Instruments로 확인했을 때 불필요한 주기적 깨어남이 없을 것.
 
+**결과 (2026-10-06)**
+- 실측(`batteryctl sniff`, Bolt + MX Master 3S, Options+ 실행 중): 리시버 알림 플래그 레지스터 0x00은 `0x000900`(WIRELESS|SOFTWARE_PRESENT, Options+가 켠 값). 전원 끔/켬에 HID++1.0 `0x41` 알림(`42 34 b0` / `02 34 b0`), 0x1D4B "powered on" 이벤트, Unified Battery 이벤트(`5a 08 00`→`55 08 00`, 90→85%)가 들어옴. 휠(0x2121/0x2150)과 Options+가 돌린 버튼(0x1B04) 이벤트는 스크롤 시 초당 수십 개.
+- `HIDPPClient`: 응답이 아닌 리포트를 알림으로 분류. HID++1.0 리시버 알림(sub id ≥ 0x40)은 항상, 2.0 기능 이벤트는 `watchNotifications`로 등록된 (슬롯, 기능 인덱스)만 통과. 판정은 할당 없이 HID 큐에서 끝낸다.
+- `Receiver`: 배터리 기능 인덱스를 알게 되면 즉시 필터 등록, `forgetFeatures`에서 해제. `notifications` 스트림 제공.
+- `BatteryMonitor`: 배터리 이벤트는 요청 없이 값 반영, `0x41` 링크 끊김은 즉시 절전 표시, 링크 복구는 슬롯 재조회. 같은 값 반복 이벤트는 UI를 깨우지 않음. 폴링(10분, tolerance 3분)은 보조.
+- 실기기: `batteryctl watch 600`에서 전원 끔 즉시 `asleep`, 켬 즉시 `reachable`. 앱 유휴 60초 CPU 시간 0.25초(디버그 빌드, 기동 직후 포함).
+- 미결: Options+ 없이 리시버 알림 플래그가 꺼져 있으면 `0x41`이 오지 않는다. 그 경우 레지스터 0x00 쓰기(리시버 설정 변경)가 필요한데 읽기 전용 원칙과 충돌하므로 사용자 결정 필요. 배터리 이벤트(2.0)는 플래그와 무관하게 온다고 추정하나 미검증.
+
 ## Phase 5. 권한 처리 (반나절)
 
 - 실행 시 `IOHIDCheckAccess`로 입력 모니터링 권한 확인, 없으면 `IOHIDRequestAccess`로 요청.

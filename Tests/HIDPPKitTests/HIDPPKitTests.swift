@@ -16,6 +16,29 @@ final class FakeChannel: HIDReportChannel, @unchecked Sendable {
         written.append(report)
         for r in reply(report) { onReport?(r) }
     }
+
+    /// 장치가 스스로 보낸 리포트를 흉내낸다.
+    func emit(_ report: [UInt8]) { onReport?(report) }
+}
+
+func event(slot: UInt8, featureIndex: UInt8, _ data: [UInt8]) -> [UInt8] {
+    var r: [UInt8] = [HIDPP.longReportID, slot, featureIndex, 0x00] + data
+    r += [UInt8](repeating: 0, count: HIDPP.longReportSize - r.count)
+    return r
+}
+
+/// Phase 4 실측 프레임: Bolt 리시버의 0x41 연결/해제 알림.
+func linkEvent(slot: UInt8, established: Bool) -> [UInt8] {
+    [HIDPP.shortReportID, slot, 0x41, 0x10, established ? 0x02 : 0x42, 0x34, 0xb0]
+}
+
+func waitUntil(_ timeoutSeconds: Double = 1, _ condition: () async -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now + .seconds(timeoutSeconds)
+    while ContinuousClock.now < deadline {
+        if await condition() { return true }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return await condition()
 }
 
 func longReply(to frame: [UInt8], _ payload: [UInt8]) -> [UInt8] {
@@ -115,6 +138,29 @@ func hidpp10Error(to frame: [UInt8], code: UInt8) -> [UInt8] {
     #expect(channel.written.count == 2)
 }
 
+@Test func clientForwardsOnlyWatchedFeatureEventsAndReceiverNotifications() async throws {
+    let channel = FakeChannel { _ in [] }
+    let client = try HIDPPClient(channel: channel)
+    let received = Snapshots<HIDPPNotification>()
+    client.setNotificationHandler { received.append($0) }
+
+    channel.emit(event(slot: 2, featureIndex: 9, [0x00, 0x50, 0x01]))      // 등록 안 된 기능(버튼) → 버림
+    #expect(received.count == 0)
+
+    client.watchNotifications(slot: 2, featureIndex: 8)
+    channel.emit([0x11, 2, 8, 0x0B, 90, 8, 0] + [UInt8](repeating: 0, count: 13))  // swID 0x0B: 타 클라이언트 응답 → 버림
+    #expect(received.count == 0)
+    channel.emit(event(slot: 2, featureIndex: 8, [0x5a, 0x08, 0x00]))
+    channel.emit(event(slot: 3, featureIndex: 8, [0x5a, 0x08, 0x00]))      // 다른 슬롯 → 버림
+    channel.emit(linkEvent(slot: 2, established: false))
+    #expect(received.count == 2)
+    #expect(received.last?.linkEstablished == false)
+
+    client.unwatchNotifications(slot: 2)
+    channel.emit(event(slot: 2, featureIndex: 8, [0x5a, 0x08, 0x00]))
+    #expect(received.count == 2)
+}
+
 // MARK: - BatteryReading
 
 @Test func unifiedBatteryDecodesSocAndLevelFlags() {
@@ -185,19 +231,19 @@ final class ReceiverSim: @unchecked Sendable {
 
 // MARK: - BatteryMonitor
 
-final class Snapshots: @unchecked Sendable {
+final class Snapshots<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
-    private var items: [[DeviceStatus]] = []
-    func append(_ s: [DeviceStatus]) { lock.lock(); items.append(s); lock.unlock() }
+    private var items: [T] = []
+    func append(_ s: T) { lock.lock(); items.append(s); lock.unlock() }
     var count: Int { lock.lock(); defer { lock.unlock() }; return items.count }
-    var last: [DeviceStatus]? { lock.lock(); defer { lock.unlock() }; return items.last }
+    var last: T? { lock.lock(); defer { lock.unlock() }; return items.last }
 }
 
 @Test func monitorKeepsLastValueWhileDeviceSleepsAndRereadsOnReturn() async throws {
     let sim = ReceiverSim(name: "MX Master 3S")
     let channel = FakeChannel(reply: sim.reply)
     let receiver = try Receiver(channel: channel, id: 7)
-    let snapshots = Snapshots()
+    let snapshots = Snapshots<[DeviceStatus]>()
     let monitor = BatteryMonitor { snapshots.append($0) }
 
     let (stream, continuation) = AsyncStream<[Receiver]>.makeStream()
@@ -275,7 +321,7 @@ final class Snapshots: @unchecked Sendable {
 
 @Test func monitorDropsDevicesOfDetachedReceiver() async throws {
     let receiver = try Receiver(channel: FakeChannel(reply: ReceiverSim(name: "MX").reply), id: 7)
-    let snapshots = Snapshots()
+    let snapshots = Snapshots<[DeviceStatus]>()
     let monitor = BatteryMonitor { snapshots.append($0) }
     let (stream, continuation) = AsyncStream<[Receiver]>.makeStream()
     continuation.yield([receiver])
@@ -285,4 +331,51 @@ final class Snapshots: @unchecked Sendable {
     #expect(await monitor.devices.isEmpty)
     #expect(snapshots.count == 2)
     #expect(snapshots.last == [])
+}
+
+@Test func monitorAppliesBatteryEventWithoutRequestsAndFollowsLinkEvents() async throws {
+    let sim = ReceiverSim(name: "MX Master 3S")
+    let channel = FakeChannel(reply: sim.reply)
+    let receiver = try Receiver(channel: channel, id: 7)
+    let snapshots = Snapshots<[DeviceStatus]>()
+    let monitor = BatteryMonitor { snapshots.append($0) }
+    let (stream, continuation) = AsyncStream<[Receiver]>.makeStream()
+    continuation.yield([receiver])
+    continuation.finish()
+    await monitor.run(receivers: stream)
+    #expect(await monitor.devices[0].battery?.percent == 90)
+    let writesAfterInitialRead = channel.written.count
+
+    // 배터리 이벤트(0x1004 인덱스 3): 85%, 충전 중. HID 요청 없이 반영.
+    channel.emit(event(slot: 2, featureIndex: sim.batteryIndex, [85, 8, 1, 0]))
+    #expect(await waitUntil { await monitor.devices[0].battery?.percent == 85 })
+    #expect(await monitor.devices[0].battery?.isCharging == true)
+    #expect(channel.written.count == writesAfterInitialRead)
+    #expect(snapshots.count == 2)
+
+    // 같은 값의 배터리 이벤트가 반복돼도 UI는 깨우지 않는다.
+    channel.emit(event(slot: 2, featureIndex: sim.batteryIndex, [85, 8, 1, 0]))
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(snapshots.count == 2)
+
+    // 아직 상태가 없는 슬롯의 이벤트는 그 슬롯을 다시 읽는다. 시뮬레이터는 슬롯 2만 답하므로 장치가 늘지 않는다.
+    channel.emit(event(slot: 4, featureIndex: sim.batteryIndex, [50, 4, 0, 0]))
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(await monitor.devices.count == 1)
+
+    // 링크 끊김: 폴링 없이 즉시 절전 표시, 값은 유지.
+    sim.online = false
+    channel.emit(linkEvent(slot: 2, established: false))
+    #expect(await waitUntil { await monitor.devices[0].isReachable == false })
+    #expect(await monitor.devices[0].battery?.percent == 85)
+    #expect(channel.written.count == writesAfterInitialRead)
+
+    // 링크 복구: 슬롯을 다시 읽어 이름과 배터리를 갱신.
+    sim.online = true
+    sim.name = "MX Anywhere 3S"
+    sim.unifiedBatteryReply = [40, 2, 0, 0]
+    channel.emit(linkEvent(slot: 2, established: true))
+    #expect(await waitUntil { await monitor.devices[0].isReachable })
+    #expect(await monitor.devices[0].name == "MX Anywhere 3S")
+    #expect(await monitor.devices[0].battery?.percent == 40)
 }

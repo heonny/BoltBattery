@@ -25,6 +25,7 @@ public struct DeviceStatus: Equatable, Sendable, Identifiable {
 public actor BatteryMonitor {
     public private(set) var devices: [DeviceStatus] = []
     private var receivers: [Receiver] = []
+    private var notificationTasks: [UInt64: Task<Void, Never>] = [:]
     private let onChange: @Sendable ([DeviceStatus]) -> Void
     private let log = Logger(subsystem: "bolt-battery", category: "battery")
 
@@ -39,8 +40,62 @@ public actor BatteryMonitor {
             let ids = Set(list.map(\.id))
             let countBefore = devices.count
             devices.removeAll { !ids.contains($0.receiverID) }
+            for (id, task) in notificationTasks where !ids.contains(id) {
+                task.cancel()
+                notificationTasks[id] = nil
+            }
+            for receiver in list where notificationTasks[receiver.id] == nil {
+                notificationTasks[receiver.id] = Task { [weak self] in
+                    for await notification in receiver.notifications {
+                        await self?.handle(notification, from: receiver)
+                    }
+                }
+            }
             await refresh(forceNotify: devices.count != countBefore)
         }
+    }
+
+    /// 이벤트 우선: 배터리 이벤트는 요청 없이 값만 반영하고, 연결 알림은 폴링을 기다리지 않고 절전/복귀를 바로 반영한다.
+    /// 변경 비교 스냅샷은 await 뒤, 변경 직전에 떠야 폴링과 겹쳐도 같은 상태를 두 번 알리지 않는다.
+    private func handle(_ notification: HIDPPNotification, from receiver: Receiver) async {
+        let slot = notification.deviceIndex
+        let key = DeviceStatus.id(receiverID: receiver.id, slot: slot)
+
+        if let linked = notification.linkEstablished {
+            if linked {
+                // refresh(_:slot:)는 내부에서 알리지 않으므로 여기서 전후를 비교한다.
+                let before = Self.withoutTimestamps(devices)
+                await refresh(receiver, slot: slot)
+                if Self.withoutTimestamps(devices) != before { onChange(devices) }
+            } else if let i = index(of: key), devices[i].isReachable {
+                devices[i].isReachable = false
+                onChange(devices)
+            }
+            return
+        }
+
+        guard !notification.isReceiverNotification, notification.function == 0,
+              let feature = await receiver.cachedFeature(slot: slot, index: notification.subID)
+        else { return }
+        // notifications.py: 배터리 이벤트 페이로드는 get_status 응답과 같은 배열이다.
+        let battery: BatteryReading? = switch feature {
+        case .unifiedBattery: BatteryReading(unifiedBatteryReply: notification.data)
+        case .batteryStatus: BatteryReading(batteryStatusReply: notification.data)
+        default: nil
+        }
+        guard let battery else { return }
+
+        guard let i = index(of: key) else {
+            let before = Self.withoutTimestamps(devices)
+            await refresh(receiver, slot: slot)
+            if Self.withoutTimestamps(devices) != before { onChange(devices) }
+            return
+        }
+        let changed = devices[i].battery != battery || !devices[i].isReachable
+        devices[i].battery = battery
+        devices[i].lastUpdated = Date()
+        devices[i].isReachable = true
+        if changed { onChange(devices) }
     }
 
     /// 모든 리시버의 슬롯 1~6을 핑한다. 빈 슬롯과 절전 슬롯은 리시버가 즉시 에러로 답하므로 비용이 작다.
