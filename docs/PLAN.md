@@ -69,12 +69,13 @@ UI와 분리된 Swift Package(`HIDPPKit`)로 만든다. CLI와 앱이 같은 코
 **완료 기준**
 - 리시버 뽑았다 꽂기, 맥 잠자기 후 깨우기, 마우스 전원 껐다 켜기 세 시나리오에서 수동 개입 없이 복구.
 
-**결과 (2026-10-06, 코드 완료 · 물리 시나리오 검증 대기)**
+**결과 (2026-10-06, 완료)**
 - `ReceiverMonitor`: `IOHIDManager` 매칭/제거 콜백(전용 큐)으로 리시버 탈착 감지, `NSWorkspace.didWakeNotification`에 전부 다시 열기. 열린 `Receiver` 목록을 `AsyncStream`으로 내보냄.
 - `BatteryMonitor` 액터: 슬롯 1~6 핑 기반 상태(`DeviceStatus`: 이름·배터리·`lastUpdated`·`isReachable`). 핑 실패 시 마지막 값 유지, 복귀 시 기능 인덱스 캐시 비우고 이름 재조회. 변경 알림은 `lastUpdated`를 제외한 값이 바뀔 때만.
 - 함정 기록: 활성화된 `IOHIDManager`가 넘겨주는 `IOHIDDevice`에 입력 리포트 콜백을 등록하면 IOKit이 `SIGTRAP`. `IOHIDDeviceCreate(io_service)`로 독립 객체를 만들어 해결.
 - 검증: 단위 테스트 14개(절전→마지막 값 유지→복귀 시 재조회, 복귀 직후 재절전 시 이름 보존, 동시 refresh 중복 방지, 리시버 제거 시 장치 삭제·알림 포함). `batteryctl watch 5`로 실기기 초기 감지·주기 갱신 확인.
-- 남은 확인: 사용자가 `swift run batteryctl watch 5`를 띄운 채 리시버 뽑았다 꽂기, 잠자기 후 깨우기, 마우스 전원 껐다 켜기 수행.
+- 실기기 확인(2026-10-06, `batteryctl watch 5`): 마우스 전원 끄기 → `90% asleep, last seen 9:18:15` 유지. 리시버 뽑기 → `(no devices)`. 다시 꽂기 → 새 registryID로 재감지, `reachable`.
+- 맥 잠자기 후 깨우기도 사용자 확인(2026-10-06).
 
 ## Phase 3. 메뉴바 UI (반나절)
 
@@ -85,6 +86,14 @@ UI와 분리된 Swift Package(`HIDPPKit`)로 만든다. CLI와 앱이 같은 코
 
 **완료 기준**
 - 메뉴바 표시와 메뉴 동작 확인, 로그인 시 자동 실행 동작.
+
+**결과 (2026-10-06)**
+- SwiftPM 실행 타겟 `BoltBattery`(SwiftUI `MenuBarExtra`) + `scripts/make-app.sh`가 `.build/BoltBattery.app`을 조립(`Packaging/Info.plist`, ad-hoc 서명). `.xcodeproj` 없음. Xcode에서는 `Package.swift`를 열면 된다.
+- `BatteryModel`(@MainActor): `BatteryMonitor` 변경 스트림을 받아 `devices` 갱신, 10분 폴링(`Task.sleep` tolerance 3분), `SMAppService.mainApp` 토글.
+- 메뉴바: 레벨별 `battery.*` 심볼, 충전 중 `battery.100.bolt`, 텍스트 `NN%`. 메뉴: 장치별 이름·%·마지막 확인 시각(절전 표시), 지금 갱신, 로그인 시 실행, 종료(⌘Q).
+- `NSApplication.setActivationPolicy(.accessory)`를 코드에서도 호출해 `swift run`으로 띄워도 Dock 아이콘이 없다.
+- 확인: 번들 실행 후 메뉴바에 아이콘과 `90%` 표시(스크린샷). 메뉴 내용과 로그인 시 실행 토글은 사용자가 직접 확인.
+- 저전력 알림(20% 이하 1회)은 선택 사항이라 미구현. 번들 ID는 임시로 `dev.heonny.BoltBattery`.
 
 ## Phase 4. 저전력 최적화 (반나절~1일)
 

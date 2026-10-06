@@ -7,10 +7,12 @@ let package = Package(
     products: [
         .library(name: "HIDPPKit", targets: ["HIDPPKit"]),
         .executable(name: "batteryctl", targets: ["batteryctl"]),
+        .executable(name: "BoltBattery", targets: ["BoltBattery"]),
     ],
     targets: [
         .target(name: "HIDPPKit"),
         .executableTarget(name: "batteryctl", dependencies: ["HIDPPKit"]),
+        .executableTarget(name: "BoltBattery", dependencies: ["HIDPPKit"]),
         .testTarget(name: "HIDPPKitTests", dependencies: ["HIDPPKit"]),
     ]
 )
