@@ -166,7 +166,7 @@ public actor BatteryMonitor {
     }
 
     /// 읽기 실패 시 마지막 값을 유지한다. 타임아웃만으로 절전 여부를 판정할 수 없다.
-    private func read<T>(_ what: String, slot: UInt8, _ body: () async throws -> T?) async -> T? {
+    private func read<T: Sendable>(_ what: String, slot: UInt8, _ body: () async throws -> T?) async -> T? {
         do {
             return try await body()
         } catch HIDPPError.timeout {
