@@ -29,4 +29,4 @@ swift run batteryctl sniff      # 앱이 받는 HID++ 알림 출력
 scripts/make-app.sh debug && open .build/BoltBattery.app
 ```
 
-계획과 각 단계의 결과는 `docs/PLAN.md`, 지켜야 할 제약은 `CLAUDE.md`에 있다.
+제품·디자인 원칙은 [PHILOSOPHY.md](docs/PHILOSOPHY.md), 구현 계획은 [PLAN.md](docs/PLAN.md), 개발 제약은 [CLAUDE.md](CLAUDE.md)에서 관리한다.

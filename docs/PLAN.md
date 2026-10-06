@@ -159,3 +159,7 @@ UI와 분리된 Swift Package(`HIDPPKit`)로 만든다. CLI와 앱이 같은 코
 - 파일 오류는 모두 로그만 남기고 삼킨다. 깨진 줄은 건너뛴다.
 
 **구조**: `BatteryHistory` 라이브러리 타겟(순수 로직, 테스트 6개) + 앱의 `BatteryModel`이 기록·차트 데이터·지우기를 담당.
+
+## 추가 기능. 메뉴바 마우스 아이콘 (2026-10-06)
+
+`MouseIcon`이 메뉴바 아이콘을 렌더링한다. 디자인·색상·성능·검증 원칙은 [PHILOSOPHY.md](PHILOSOPHY.md)에서 관리한다.
