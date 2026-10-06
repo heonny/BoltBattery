@@ -19,25 +19,37 @@ public final class IOHIDReportChannel: HIDReportChannel, @unchecked Sendable {
 
     public let productID: Int
     public let productName: String
-    private let device: IOHIDDevice
+    /// IORegistry 엔트리 ID. 탈착 콜백에서 같은 장치를 식별하는 키.
+    public let registryID: UInt64
+    let device: IOHIDDevice
     private let queue = DispatchQueue(label: "bolt-battery.hid")
     private var started = false
+
+    static var receiverMatching: [[String: Any]] {
+        [boltProductID, unifyingProductID].map { pid in
+            [kIOHIDVendorIDKey: logitechVendorID, kIOHIDProductIDKey: pid, kIOHIDPrimaryUsagePageKey: hidppUsagePage]
+        }
+    }
 
     /// 연결된 Bolt/Unifying 리시버의 벤더 인터페이스를 모두 찾는다. 장치를 열지는 않는다.
     public static func discoverReceivers() -> [IOHIDReportChannel] {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-        let matching = [boltProductID, unifyingProductID].map { pid -> [String: Any] in
-            [kIOHIDVendorIDKey: logitechVendorID, kIOHIDProductIDKey: pid, kIOHIDPrimaryUsagePageKey: hidppUsagePage]
-        }
-        IOHIDManagerSetDeviceMatchingMultiple(manager, matching as CFArray)
+        IOHIDManagerSetDeviceMatchingMultiple(manager, receiverMatching as CFArray)
         guard let set = IOHIDManagerCopyDevices(manager) else { return [] }
         return (set as NSSet).allObjects.map { IOHIDReportChannel(device: $0 as! IOHIDDevice) }
+    }
+
+    static func registryID(of device: IOHIDDevice) -> UInt64 {
+        var id: UInt64 = 0
+        IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device), &id)
+        return id
     }
 
     init(device: IOHIDDevice) {
         self.device = device
         productID = IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int ?? 0
         productName = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String ?? "?"
+        registryID = Self.registryID(of: device)
     }
 
     deinit {

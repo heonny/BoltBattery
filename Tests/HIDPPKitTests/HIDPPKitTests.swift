@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import HIDPPKit
 
@@ -131,10 +132,21 @@ func hidpp10Error(to frame: [UInt8], code: UInt8) -> [UInt8] {
 // MARK: - Receiver
 
 /// 슬롯 2에 HID++ 4.5 마우스가 하나 있는 리시버를 흉내낸다. 나머지 슬롯은 Bolt 실측처럼 0x8F/0x09.
-func simulatedReceiver(name: String, nameIndex: UInt8 = 2, batteryIndex: UInt8 = 3) -> ([UInt8]) -> [[UInt8]] {
-    { frame in
+/// `online`을 끄면 슬롯 2도 절전 장치처럼 0x8F/0x09로 답한다.
+final class ReceiverSim: @unchecked Sendable {
+    var name: String
+    var online = true
+    /// 이름 조회(DEVICE_NAME)만 응답하지 않아 타임아웃을 흉내낸다.
+    var failNameRead = false
+    var unifiedBatteryReply: [UInt8] = [90, 4, 1, 0]
+    let nameIndex: UInt8 = 2
+    let batteryIndex: UInt8 = 3
+
+    init(name: String) { self.name = name }
+
+    func reply(_ frame: [UInt8]) -> [[UInt8]] {
         let (slot, feature, function) = (frame[1], frame[2], frame[3] >> 4)
-        guard slot == 2 else { return [hidpp10Error(to: frame, code: 0x09)] }
+        guard slot == 2, online else { return [hidpp10Error(to: frame, code: 0x09)] }
         switch (feature, function) {
         case (0, 1):
             return [longReply(to: frame, [4, 5, frame[6]])]
@@ -143,11 +155,11 @@ func simulatedReceiver(name: String, nameIndex: UInt8 = 2, batteryIndex: UInt8 =
             let index: UInt8 = id == FeatureID.deviceName.rawValue ? nameIndex : id == FeatureID.unifiedBattery.rawValue ? batteryIndex : 0
             return [longReply(to: frame, [index, 0, 1])]
         case (nameIndex, 0):
-            return [longReply(to: frame, [UInt8(name.utf8.count)])]
+            return failNameRead ? [] : [longReply(to: frame, [UInt8(name.utf8.count)])]
         case (nameIndex, 1):
             return [longReply(to: frame, Array(name.utf8.dropFirst(Int(frame[4])).prefix(16)))]
         case (batteryIndex, 1):
-            return [longReply(to: frame, [90, 4, 1, 0])]
+            return [longReply(to: frame, unifiedBatteryReply)]
         default:
             return [hidpp20Error(to: frame, code: 0x07)]
         }
@@ -155,7 +167,7 @@ func simulatedReceiver(name: String, nameIndex: UInt8 = 2, batteryIndex: UInt8 =
 }
 
 @Test func receiverEnumeratesDevicesAndReadsBattery() async throws {
-    let channel = FakeChannel(reply: simulatedReceiver(name: "Logitech MX Master 3S For Mac"))
+    let channel = FakeChannel(reply: ReceiverSim(name: "Logitech MX Master 3S For Mac").reply)
     let receiver = try Receiver(channel: channel)
 
     let devices = try await receiver.pairedDevices()
@@ -169,4 +181,108 @@ func simulatedReceiver(name: String, nameIndex: UInt8 = 2, batteryIndex: UInt8 =
     #expect(rootLookups.count == 2)
     _ = try await receiver.battery(slot: 2)
     #expect(channel.written.filter { $0[1] == 2 && $0[2] == 0 && $0[3] >> 4 == 0 }.count == 2)
+}
+
+// MARK: - BatteryMonitor
+
+final class Snapshots: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [[DeviceStatus]] = []
+    func append(_ s: [DeviceStatus]) { lock.lock(); items.append(s); lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return items.count }
+    var last: [DeviceStatus]? { lock.lock(); defer { lock.unlock() }; return items.last }
+}
+
+@Test func monitorKeepsLastValueWhileDeviceSleepsAndRereadsOnReturn() async throws {
+    let sim = ReceiverSim(name: "MX Master 3S")
+    let channel = FakeChannel(reply: sim.reply)
+    let receiver = try Receiver(channel: channel, id: 7)
+    let snapshots = Snapshots()
+    let monitor = BatteryMonitor { snapshots.append($0) }
+
+    let (stream, continuation) = AsyncStream<[Receiver]>.makeStream()
+    continuation.yield([receiver])
+    continuation.finish()
+    await monitor.run(receivers: stream)
+
+    var devices = await monitor.devices
+    #expect(devices.count == 1)
+    #expect(devices[0].id == "7:2")
+    #expect(devices[0].name == "MX Master 3S")
+    #expect(devices[0].battery == BatteryReading(percent: 90, isCharging: true, isApproximate: false))
+    #expect(devices[0].isReachable)
+    let firstSeen = devices[0].lastUpdated
+    #expect(firstSeen != nil)
+    #expect(snapshots.count == 1)
+
+    sim.online = false
+    await monitor.refresh()
+    devices = await monitor.devices
+    #expect(devices.count == 1)
+    #expect(!devices[0].isReachable)
+    #expect(devices[0].battery?.percent == 90)
+    #expect(devices[0].lastUpdated == firstSeen)
+    #expect(snapshots.count == 2)
+
+    await monitor.refresh()
+    #expect(snapshots.count == 2)
+
+    sim.online = true
+    sim.name = "MX Anywhere 3S"
+    sim.unifiedBatteryReply = [40, 2, 0, 0]
+    let rootLookupsBefore = channel.written.filter { $0[2] == 0 && $0[3] >> 4 == 0 }.count
+    await monitor.refresh()
+    devices = await monitor.devices
+    #expect(devices[0].isReachable)
+    #expect(devices[0].name == "MX Anywhere 3S")
+    #expect(devices[0].battery == BatteryReading(percent: 40, isCharging: false, isApproximate: false))
+    #expect(devices[0].lastUpdated != firstSeen)
+    #expect(channel.written.filter { $0[2] == 0 && $0[3] >> 4 == 0 }.count > rootLookupsBefore)
+    #expect(snapshots.count == 3)
+}
+
+@Test func monitorKeepsKnownNameWhenDeviceDozesOffDuringNameRead() async throws {
+    let sim = ReceiverSim(name: "MX Master 3S")
+    let receiver = try Receiver(channel: FakeChannel(reply: sim.reply), id: 7, timeout: 0.02)
+    let monitor = BatteryMonitor { _ in }
+    let (stream, continuation) = AsyncStream<[Receiver]>.makeStream()
+    continuation.yield([receiver])
+    continuation.finish()
+    await monitor.run(receivers: stream)
+
+    sim.online = false
+    await monitor.refresh()
+    sim.online = true
+    sim.failNameRead = true
+    await monitor.refresh()
+    let device = await monitor.devices[0]
+    #expect(device.isReachable)
+    #expect(device.name == "MX Master 3S")
+}
+
+@Test func concurrentRefreshesDoNotDuplicateDevices() async throws {
+    let receiver = try Receiver(channel: FakeChannel(reply: ReceiverSim(name: "MX").reply), id: 7)
+    let monitor = BatteryMonitor { _ in }
+    let (stream, continuation) = AsyncStream<[Receiver]>.makeStream()
+    continuation.yield([receiver])
+    continuation.finish()
+    async let running: Void = monitor.run(receivers: stream)
+    async let a: Void = monitor.refresh()
+    async let b: Void = monitor.refresh()
+    _ = await (running, a, b)
+    #expect(await monitor.devices.count == 1)
+}
+
+@Test func monitorDropsDevicesOfDetachedReceiver() async throws {
+    let receiver = try Receiver(channel: FakeChannel(reply: ReceiverSim(name: "MX").reply), id: 7)
+    let snapshots = Snapshots()
+    let monitor = BatteryMonitor { snapshots.append($0) }
+    let (stream, continuation) = AsyncStream<[Receiver]>.makeStream()
+    continuation.yield([receiver])
+    continuation.yield([])
+    continuation.finish()
+    await monitor.run(receivers: stream)
+    #expect(await monitor.devices.isEmpty)
+    #expect(snapshots.count == 2)
+    #expect(snapshots.last == [])
 }

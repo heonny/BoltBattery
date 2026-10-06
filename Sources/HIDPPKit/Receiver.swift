@@ -20,6 +20,8 @@ public actor Receiver {
     /// receiver.py: Bolt/Unifying 리시버는 최대 6 슬롯.
     public static let slots: ClosedRange<UInt8> = 1...6
 
+    /// 리시버 식별자. 실제 장치는 IORegistry 엔트리 ID.
+    public nonisolated let id: UInt64
     public nonisolated let productID: Int
     public nonisolated let productName: String
     private let client: HIDPPClient
@@ -27,15 +29,20 @@ public actor Receiver {
 
     /// 연결된 Bolt/Unifying 리시버를 모두 열어 반환한다.
     public static func discover() throws -> [Receiver] {
-        try IOHIDReportChannel.discoverReceivers().map {
-            try Receiver(channel: $0, productID: $0.productID, productName: $0.productName)
-        }
+        try IOHIDReportChannel.discoverReceivers().map { try Receiver(channel: $0) }
     }
 
-    public init(channel: HIDReportChannel, productID: Int = 0, productName: String = "") throws {
+    init(channel: IOHIDReportChannel) throws {
+        try self.init(channel: channel, id: channel.registryID, productID: channel.productID, productName: channel.productName)
+    }
+
+    public init(
+        channel: HIDReportChannel, id: UInt64 = 0, productID: Int = 0, productName: String = "", timeout: TimeInterval = 1.0
+    ) throws {
+        self.id = id
         self.productID = productID
         self.productName = productName
-        client = try HIDPPClient(channel: channel)
+        client = try HIDPPClient(channel: channel, timeout: timeout)
     }
 
     /// 슬롯 1~6을 핑해서 응답한 장치만 반환한다.
