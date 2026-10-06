@@ -83,13 +83,14 @@ import Testing
     #expect(settings.displayMode == .percentOnly)
     #expect(menu.items.filter { $0.representedObject is String && $0.state == .on }.count == 1)
     #expect(menu.items[percent].state == .on)
-    let logging = menu.items.firstIndex { $0.title == "진단 로그 쓰기" }!
-    #expect(menu.items[logging].state == .off)
-    menu.performActionForItem(at: logging)
+    let diagnostics = menu.items.first { $0.title == "진단" }!.submenu!
+    let logging = diagnostics.items.firstIndex { $0.title == "진단 로그 쓰기" }!
+    #expect(diagnostics.items[logging].state == .off)
+    diagnostics.performActionForItem(at: logging)
     #expect(settings.fileLogging)
-    #expect(menu.items[logging].state == .on)
-    menu.performActionForItem(at: logging)
+    #expect(diagnostics.items[logging].state == .on)
+    diagnostics.performActionForItem(at: logging)
     #expect(!settings.fileLogging)
-    #expect(menu.items[logging].state == .off)
+    #expect(diagnostics.items[logging].state == .off)
     #expect(AppSettings(defaults: defaults).displayMode == .percentOnly)
 }

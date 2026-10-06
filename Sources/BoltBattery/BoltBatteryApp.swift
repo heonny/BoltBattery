@@ -5,6 +5,7 @@ import Combine
 import Diagnostics
 import HIDPPKit
 import SwiftUI
+import UserNotifications
 
 @main
 @MainActor
@@ -23,10 +24,13 @@ enum BoltBatteryApp {
 /// macOS 26부터 시스템 메뉴가 Liquid Glass로 그려지고 그림자·모서리·바깥 클릭 닫힘을 OS가 맡는다.
 /// (MenuBarExtra .window와 NSPopover는 불투명 재질을 깔고, 직접 만든 투명 패널은 창 그림자가 네모로 비쳤다.)
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     private let settings = AppSettings()
     private lazy var model = BatteryModel()
+    private lazy var supportExport = SupportExportController(model: model, settings: settings)
     private lazy var settingsMenu = SettingsMenuController(settings: settings)
+    private lazy var lowBatteryNotifier = LowBatteryNotifier(settings: settings)
+    private var configuringNotifications = false
     private var statusItem: NSStatusItem?
     private var mainMenu: NSMenu?
     private var hosting: NSHostingView<PopoverView>?
@@ -34,6 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var settingsSubscriptions: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        settingsMenu.onCopyDiagnostics = { [weak self] in self?.supportExport.copyDiagnostics() }
+        settingsMenu.onExportHistory = { [weak self] in self?.supportExport.exportHistory() }
+        UNUserNotificationCenter.current().delegate = self
         DiagnosticFile.shared.setEnabled(settings.fileLogging)
         DiagnosticLogger(category: "app").info("Application started")
         MouseIcon.dumpPreviewIfRequested()
@@ -71,6 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.hosting?.appearance = theme.appearance
             self?.mainMenu?.appearance = theme.appearance
         }.store(in: &settingsSubscriptions)
+        model.$devices.sink { [weak self] devices in
+            Task { await self?.lowBatteryNotifier.process(devices) }
+        }.store(in: &settingsSubscriptions)
         updateButton()
 
         // 스크린샷 확인용: `BoltBattery --debug-panel`로 띄우면 메뉴를 바로 연다.
@@ -107,7 +117,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.model.setLaunchAtLogin(!self.model.launchAtLogin)
                 },
                 onRefresh: self.model.refreshNow,
-                onClear: self.model.clearHistory
+                onClear: self.model.clearHistory,
+                onNotificationThreshold: { [weak self] in self?.configureNotifications($0) }
             )
             menu.delegate = self
             statusItem.menu = menu
@@ -117,6 +128,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuDidClose(_ menu: NSMenu) {
         if menu !== mainMenu { statusItem?.menu = mainMenu }
+    }
+
+    private func configureNotifications(_ threshold: Int) {
+        guard !configuringNotifications else { return }
+        configuringNotifications = true
+        Task {
+            defer { configuringNotifications = false }
+            do {
+                guard try await lowBatteryNotifier.configure(threshold) else {
+                    showNotificationError("시스템 설정 > 알림 > Bolt Battery에서 알림을 허용해 주세요.")
+                    return
+                }
+                await lowBatteryNotifier.process(model.devices)
+            } catch {
+                showNotificationError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func showNotificationError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "배터리 알림을 켤 수 없습니다"
+        alert.informativeText = message
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
     }
 
     func applicationWillTerminate(_ notification: Notification) {

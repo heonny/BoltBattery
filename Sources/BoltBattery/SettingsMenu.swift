@@ -3,10 +3,13 @@ import Diagnostics
 
 @MainActor
 final class SettingsMenuController: NSObject {
+    var onCopyDiagnostics: () -> Void = {}
+    var onExportHistory: () -> Void = {}
     private let settings: AppSettings
     private var onLaunchAtLogin: () -> Void = {}
     private var onRefresh: () -> Void = {}
     private var onClear: () -> Void = {}
+    private var onNotificationThreshold: (Int) -> Void = { _ in }
     private let confirmClear: @MainActor () -> Bool
 
     init(settings: AppSettings, confirmClear: @escaping @MainActor () -> Bool = SettingsMenuController.confirmHistoryClear) {
@@ -15,10 +18,12 @@ final class SettingsMenuController: NSObject {
     }
 
     func makeMenu(launchAtLogin: Bool, onLaunchAtLogin: @escaping () -> Void,
-                  onRefresh: @escaping () -> Void = {}, onClear: @escaping () -> Void = {}) -> NSMenu {
+                  onRefresh: @escaping () -> Void = {}, onClear: @escaping () -> Void = {},
+                  onNotificationThreshold: @escaping (Int) -> Void = { _ in }) -> NSMenu {
         self.onLaunchAtLogin = onLaunchAtLogin
         self.onRefresh = onRefresh
         self.onClear = onClear
+        self.onNotificationThreshold = onNotificationThreshold
         let menu = NSMenu()
         menu.appearance = settings.theme.appearance
         menu.autoenablesItems = false
@@ -42,12 +47,37 @@ final class SettingsMenuController: NSObject {
         }
         themeItem.submenu = themeMenu
         menu.addItem(themeItem)
-        add("진단 로그 쓰기", action: #selector(toggleLogging(_:)), to: menu).state = settings.fileLogging ? .on : .off
-        add("로그 폴더 열기…", action: #selector(openLogs), to: menu)
+        let notificationItem = NSMenuItem(title: "배터리 부족 알림", action: nil, keyEquivalent: "")
+        let notificationMenu = NSMenu(title: "배터리 부족 알림")
+        notificationMenu.appearance = settings.theme.appearance
+        notificationMenu.autoenablesItems = false
+        for threshold in AppSettings.lowBatteryThresholds {
+            let item = add(threshold == 0 ? "끄기" : "\(threshold)% 이하",
+                           action: #selector(selectNotificationThreshold(_:)), to: notificationMenu)
+            item.representedObject = threshold
+            item.state = settings.lowBatteryThreshold == threshold ? .on : .off
+        }
+        notificationItem.submenu = notificationMenu
+        menu.addItem(notificationItem)
+        let diagnosticsItem = NSMenuItem(title: "진단", action: nil, keyEquivalent: "")
+        diagnosticsItem.submenu = makeDiagnosticsMenu()
+        menu.addItem(diagnosticsItem)
         add("로그인 시 실행", action: #selector(toggleLaunchAtLogin), to: menu).state = launchAtLogin ? .on : .off
         menu.addItem(.separator())
         add("Bolt Battery 정보", action: #selector(showAbout), to: menu)
         add("종료", action: #selector(quit), to: menu).keyEquivalent = "q"
+        return menu
+    }
+
+    private func makeDiagnosticsMenu() -> NSMenu {
+        let menu = NSMenu(title: "진단")
+        menu.appearance = settings.theme.appearance
+        menu.autoenablesItems = false
+        add("진단 정보 복사", action: #selector(copyDiagnostics), to: menu)
+        add("진단 로그 쓰기", action: #selector(toggleLogging(_:)), to: menu).state = settings.fileLogging ? .on : .off
+        add("로그 폴더 열기…", action: #selector(openLogs), to: menu)
+        menu.addItem(.separator())
+        add("배터리 기록 내보내기…", action: #selector(exportHistory), to: menu)
         return menu
     }
 
@@ -81,7 +111,14 @@ final class SettingsMenuController: NSObject {
         sender.state = settings.fileLogging ? .on : .off
     }
 
+    @objc private func selectNotificationThreshold(_ sender: NSMenuItem) {
+        guard let threshold = sender.representedObject as? Int else { return }
+        onNotificationThreshold(threshold)
+    }
+
     @objc private func toggleLaunchAtLogin() { onLaunchAtLogin() }
+    @objc private func copyDiagnostics() { onCopyDiagnostics() }
+    @objc private func exportHistory() { onExportHistory() }
     @objc private func refresh() { onRefresh() }
     @objc private func clearHistory() {
         guard confirmClear() else { return }

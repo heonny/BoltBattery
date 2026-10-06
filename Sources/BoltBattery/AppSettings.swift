@@ -36,6 +36,10 @@ enum DisplayMode: String, CaseIterable {
 
 @MainActor
 final class AppSettings: ObservableObject {
+    static let lowBatteryThresholds = [0, 10, 20, 30]
+    @Published var lowBatteryThreshold: Int {
+        didSet { defaults.set(lowBatteryThreshold, forKey: "lowBatteryThreshold") }
+    }
     @Published var theme: AppTheme {
         didSet { defaults.set(theme.rawValue, forKey: "theme") }
     }
@@ -49,6 +53,8 @@ final class AppSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        let threshold = defaults.integer(forKey: "lowBatteryThreshold")
+        lowBatteryThreshold = Self.lowBatteryThresholds.contains(threshold) ? threshold : 0
         theme = AppTheme(rawValue: defaults.string(forKey: "theme") ?? "") ?? .system
         displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode") ?? "") ?? .iconAndPercent
         fileLogging = defaults.object(forKey: "fileLogging") as? Bool ?? false
