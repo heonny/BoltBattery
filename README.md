@@ -1,4 +1,15 @@
-# Bolt Battery
+<p align="center">
+  <img src="Packaging/AppIcon.png" width="128" height="128" alt="Bolt Battery 앱 아이콘">
+</p>
+
+<h1 align="center">Bolt Battery</h1>
+
+<p align="center">
+  <a href="https://github.com/heonny/BoltBattery/actions/workflows/ci.yml"><img src="https://github.com/heonny/BoltBattery/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple" alt="macOS 13 이상">
+  <img src="https://img.shields.io/badge/Swift-6-orange?logo=swift" alt="Swift 6">
+</p>
 
 Logi Bolt 리시버로 연결된 Logitech 마우스의 배터리를 macOS 메뉴바에 표시하는 앱. 마우스 설정을 변경하지 않으며 Options+와 함께 사용할 수 있다.
 
@@ -53,8 +64,19 @@ scripts/make-app.sh debug
 
 개발 제약과 코드 구조는 [CLAUDE.md](CLAUDE.md)를 따른다. 완료한 개발 계획은 Git 이력에 남기고 현재 문서에는 유지하지 않는다.
 
-## 라이선스와 참고 자료
+### CI
+
+GitHub Actions는 `main` 푸시와 Pull Request에서 다음을 확인한다. Actions 화면에서 수동 실행도 가능하다.
+
+- **Test**: macOS에서 `swift test`로 단위 테스트 실행
+- **Verify**: 셸 스크립트 문법과 Info.plist 검사, Apple Silicon·Intel 유니버설 앱 빌드, 아이콘 포함 여부와 ad-hoc 서명 검증
+
+CI는 실제 리시버 연결이나 메뉴 클릭을 검증하지 않는다. 하드웨어·UI 동작은 로컬에서 확인한다.
+
+## 라이선스
 
 Bolt Battery의 라이선스는 [MIT](LICENSE)다.
 
-HID++ 프레임·기능 조회·배터리 해석은 [Solaar의 고정 리비전](https://github.com/pwr-Solaar/Solaar/tree/e7304c4c451cc9bb4f206a914844525e67856a28/lib/logitech_receiver)을 참고했다. 잔량 레벨을 숫자로 표시하는 근삿값 `90/50/20/5`도 Solaar의 `BatteryLevelApproximation`을 따른다. 참고한 Solaar 소스는 GPL-2.0-or-later이며 해당 저작물의 라이선스를 MIT로 변경하는 것은 아니다. Solaar 파일이나 패키지는 이 저장소와 앱에 포함하지 않는다.
+## 참고 자료
+
+HID++ 통신 구현에는 [Solaar](https://github.com/pwr-Solaar/Solaar)를 참고했다. 상세 출처는 코드 주석에 기록한다.

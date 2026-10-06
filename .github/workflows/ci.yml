@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Unit tests
+        run: swift test
+
+  verify:
+    name: Verify
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Validate packaging files
+        run: |
+          for script in scripts/*.sh; do
+            sh -n "$script"
+          done
+          plutil -lint Packaging/Info.plist
+          git diff --check
+      - name: Build universal app
+        env:
+          SIGN_IDENTITY: '-'
+        run: scripts/make-app.sh release
+      - name: Verify app bundle
+        shell: bash
+        run: |
+          test -s .build/BoltBattery.app/Contents/Resources/AppIcon.icns
+          architectures=" $(lipo -archs .build/BoltBattery.app/Contents/MacOS/BoltBattery) "
+          [[ "$architectures" == *" arm64 "* ]]
+          [[ "$architectures" == *" x86_64 "* ]]
+          codesign --verify --deep --strict .build/BoltBattery.app
