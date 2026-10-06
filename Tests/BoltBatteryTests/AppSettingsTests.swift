@@ -3,6 +3,39 @@ import AppKit
 import Testing
 @testable import BoltBattery
 
+@Test @MainActor func hourlyAxisUsesPadded24HourTime() {
+    let utc = TimeZone(secondsFromGMT: 0)!
+    for (hour, expected) in [(0, "00:00"), (1, "01:00"), (13, "13:00"), (23, "23:00")] {
+        let date = Date(timeIntervalSince1970: Double(hour * 3600))
+        #expect(HistoryChart.axisLabel(for: date, range: .day, timeZone: utc) == expected)
+    }
+}
+
+@Test @MainActor func themeSelectionPersistsAndInvalidValueFollowsSystem() {
+    _ = NSApplication.shared
+    let suite = UUID().uuidString
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let settings = AppSettings(defaults: defaults)
+    #expect(settings.theme == .system)
+    #expect(settings.theme.appearance == nil)
+    let controller = SettingsMenuController(settings: settings)
+    defer { withExtendedLifetime(controller) {} }
+    let menu = controller.makeMenu(launchAtLogin: false, onLaunchAtLogin: {})
+    let themes = menu.items.first { $0.title == "테마" }!.submenu!
+    for (index, theme) in AppTheme.allCases.enumerated() {
+        themes.performActionForItem(at: index)
+        #expect(settings.theme == theme)
+        #expect(AppSettings(defaults: defaults).theme == theme)
+        #expect(themes.items.filter { $0.state == .on }.count == 1)
+        #expect(themes.items[index].state == .on)
+    }
+    #expect(AppTheme.light.appearance?.name == .aqua)
+    #expect(AppTheme.dark.appearance?.name == .darkAqua)
+    defaults.set("invalid", forKey: "theme")
+    #expect(AppSettings(defaults: defaults).theme == .system)
+}
+
 @Test @MainActor func settingsPersistAndInvalidDisplayFallsBack() {
     let suite = UUID().uuidString
     let defaults = UserDefaults(suiteName: suite)!

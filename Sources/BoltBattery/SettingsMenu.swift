@@ -20,6 +20,7 @@ final class SettingsMenuController: NSObject {
         self.onRefresh = onRefresh
         self.onClear = onClear
         let menu = NSMenu()
+        menu.appearance = settings.theme.appearance
         menu.autoenablesItems = false
         add("지금 갱신", action: #selector(refresh), to: menu)
         add("배터리 기록 초기화…", action: #selector(clearHistory), to: menu)
@@ -30,6 +31,17 @@ final class SettingsMenuController: NSObject {
             item.state = settings.displayMode == mode ? .on : .off
         }
         menu.addItem(.separator())
+        let themeItem = NSMenuItem(title: "테마", action: nil, keyEquivalent: "")
+        let themeMenu = NSMenu(title: "테마")
+        themeMenu.appearance = settings.theme.appearance
+        themeMenu.autoenablesItems = false
+        for theme in AppTheme.allCases {
+            let item = add(theme.title, action: #selector(selectTheme(_:)), to: themeMenu)
+            item.representedObject = theme.rawValue
+            item.state = settings.theme == theme ? .on : .off
+        }
+        themeItem.submenu = themeMenu
+        menu.addItem(themeItem)
         add("진단 로그 쓰기", action: #selector(toggleLogging(_:)), to: menu).state = settings.fileLogging ? .on : .off
         add("로그 폴더 열기…", action: #selector(openLogs), to: menu)
         add("로그인 시 실행", action: #selector(toggleLaunchAtLogin), to: menu).state = launchAtLogin ? .on : .off
@@ -53,6 +65,14 @@ final class SettingsMenuController: NSObject {
         for item in sender.menu?.items ?? [] {
             guard let value = item.representedObject as? String else { continue }
             item.state = value == rawValue ? .on : .off
+        }
+    }
+
+    @objc private func selectTheme(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String, let theme = AppTheme(rawValue: rawValue) else { return }
+        settings.theme = theme
+        for item in sender.menu?.items ?? [] {
+            item.state = item === sender ? .on : .off
         }
     }
 

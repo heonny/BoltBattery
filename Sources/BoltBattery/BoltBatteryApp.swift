@@ -66,6 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DiagnosticFile.shared.setEnabled(enabled)
             DiagnosticLogger(category: "app").info("File logging \(enabled ? "enabled" : "disabled")")
         }.store(in: &settingsSubscriptions)
+        settings.$theme.sink { [weak self] theme in
+            NSApp.appearance = theme.appearance
+            self?.hosting?.appearance = theme.appearance
+            self?.mainMenu?.appearance = theme.appearance
+        }.store(in: &settingsSubscriptions)
         updateButton()
 
         // 스크린샷 확인용: `BoltBattery --debug-panel`로 띄우면 메뉴를 바로 연다.
@@ -230,36 +235,65 @@ struct HistoryChart: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            Chart(points) { point in
-                AreaMark(x: .value("시각", point.time), y: .value("배터리", point.percent))
-                    .foregroundStyle(.linearGradient(colors: [Color.accentColor.opacity(0.35), .clear], startPoint: .top, endPoint: .bottom))
-                    .interpolationMethod(.monotone)
-                LineMark(x: .value("시각", point.time), y: .value("배터리", point.percent))
-                    .foregroundStyle(Color.accentColor)
-                    .interpolationMethod(.monotone)
-                if point.isCharging {
-                    PointMark(x: .value("시각", point.time), y: .value("배터리", point.percent))
-                        .foregroundStyle(.green)
-                        .symbolSize(20)
+            let now = Date()
+            let start = now.addingTimeInterval(-range.window)
+            Chart {
+                ForEach(points.filter(\.isCharging)) { point in
+                    RectangleMark(
+                        xStart: .value("충전 시작", max(start, point.time)),
+                        xEnd: .value("충전 끝", min(now, Self.intervalEnd(for: point.time, range: range))),
+                        yStart: .value("최소", 0), yEnd: .value("최대", 100)
+                    )
+                    .foregroundStyle(Color.green.opacity(0.16))
+                }
+                ForEach(points) { point in
+                    AreaMark(x: .value("시각", point.time), y: .value("배터리", point.percent))
+                        .foregroundStyle(.linearGradient(colors: [Color.accentColor.opacity(0.35), .clear], startPoint: .top, endPoint: .bottom))
+                        .interpolationMethod(.linear)
+                    LineMark(x: .value("시각", point.time), y: .value("배터리", point.percent))
+                        .foregroundStyle(Color.accentColor)
+                        .interpolationMethod(.linear)
                 }
             }
-            .chartXScale(domain: Date().addingTimeInterval(-range.window)...Date())
+            .chartXScale(domain: start...now)
             .chartYScale(domain: 0...100)
+            .chartPlotStyle { plot in plot.clipped() }
+            .chartOverlay { proxy in
+                ChartHoverOverlay(proxy: proxy, points: points, range: range)
+            }
             .chartYAxis { AxisMarks(values: [0, 50, 100]) }
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                    AxisGridLine()
-                    AxisValueLabel(format: Self.axisFormat(for: range))
+                AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                    if let date = value.as(Date.self), (start...now).contains(date) {
+                        AxisGridLine()
+                        AxisValueLabel(centered: false, anchor: date > now.addingTimeInterval(-range.window / 8) ? .topTrailing :
+                            date < start.addingTimeInterval(range.window / 8) ? .topLeading : .top) {
+                            Text(Self.axisLabel(for: date, range: range))
+                                .monospacedDigit()
+                                .fixedSize()
+                        }
+                    }
                 }
             }
         }
     }
 
-    static func axisFormat(for range: HistoryRange) -> Date.FormatStyle {
+    static func intervalEnd(for date: Date, range: HistoryRange) -> Date {
         switch range {
-        case .day: .dateTime.hour()
-        case .week: .dateTime.weekday(.abbreviated)
-        case .quarter: .dateTime.month(.abbreviated).day()
+        case .day: date.addingTimeInterval(BatteryHistory.recordingInterval)
+        case .week: date.addingTimeInterval(3_600)
+        case .quarter: Calendar.current.date(byAdding: .day, value: 1, to: date) ?? date.addingTimeInterval(86_400)
+        }
+    }
+
+    static func axisLabel(for date: Date, range: HistoryRange, timeZone: TimeZone = .current) -> String {
+        switch range {
+        case .day:
+            date.formatted(Date.VerbatimFormatStyle(
+                format: "\(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)",
+                timeZone: timeZone, calendar: Calendar(identifier: .gregorian)))
+        case .week: date.formatted(.dateTime.weekday(.abbreviated))
+        case .quarter: date.formatted(.dateTime.month(.abbreviated).day())
         }
     }
 }

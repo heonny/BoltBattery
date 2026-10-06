@@ -1,5 +1,26 @@
 import Foundation
 import Combine
+import AppKit
+
+enum AppTheme: String, CaseIterable {
+    case system, light, dark
+
+    var title: String {
+        switch self {
+        case .system: "시스템"
+        case .light: "라이트"
+        case .dark: "다크"
+        }
+    }
+
+    var appearance: NSAppearance? {
+        switch self {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+}
 
 enum DisplayMode: String, CaseIterable {
     case iconAndPercent, percentOnly, iconOnly
@@ -15,6 +36,9 @@ enum DisplayMode: String, CaseIterable {
 
 @MainActor
 final class AppSettings: ObservableObject {
+    @Published var theme: AppTheme {
+        didSet { defaults.set(theme.rawValue, forKey: "theme") }
+    }
     @Published var displayMode: DisplayMode {
         didSet { defaults.set(displayMode.rawValue, forKey: "displayMode") }
     }
@@ -25,6 +49,7 @@ final class AppSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        theme = AppTheme(rawValue: defaults.string(forKey: "theme") ?? "") ?? .system
         displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode") ?? "") ?? .iconAndPercent
         fileLogging = defaults.object(forKey: "fileLogging") as? Bool ?? false
     }
