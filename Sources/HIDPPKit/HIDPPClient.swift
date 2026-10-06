@@ -1,4 +1,5 @@
 import Foundation
+import Diagnostics
 
 // 프로토콜 근거는 모두 Solaar master e7304c4 (lib/logitech_receiver/*.py) 기준.
 
@@ -93,6 +94,7 @@ public struct HIDPPNotification: Sendable, Equatable {
 public final class HIDPPClient: @unchecked Sendable {
     public let timeout: TimeInterval
     private let channel: HIDReportChannel
+    private let log = DiagnosticLogger(category: "hidpp")
     private let requestQueue = DispatchQueue(label: "bolt-battery.hidpp.request")
     private let lock = NSLock()
     private var waiter: (([UInt8]) -> Bool)?
@@ -115,7 +117,9 @@ public final class HIDPPClient: @unchecked Sendable {
         while true {
             do {
                 return try await requestOnce(deviceIndex: deviceIndex, feature: feature, function: function, params: params)
-            } catch let error as HIDPPError where attempt < attempts && Self.isRetryable(error) {
+            } catch let error as HIDPPError where Self.isRetryable(error) {
+                log.info("slot \(deviceIndex) feature \(feature) function \(function) attempt \(attempt)/\(attempts): \(error)")
+                guard attempt < attempts else { throw error }
                 try await Task.sleep(for: .milliseconds(50 * attempt))
                 attempt += 1
             }

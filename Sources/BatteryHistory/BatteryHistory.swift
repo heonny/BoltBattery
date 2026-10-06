@@ -1,5 +1,5 @@
 import Foundation
-import os
+import Diagnostics
 
 public struct BatterySample: Equatable, Sendable {
     public let time: Date
@@ -59,7 +59,7 @@ public actor BatteryHistory {
 
     public private(set) var samples: [BatterySample] = []
     private let fileURL: URL
-    private let log = Logger(subsystem: "bolt-battery", category: "history")
+    private let log = DiagnosticLogger(category: "history")
 
     public init(fileURL: URL) {
         self.fileURL = fileURL
@@ -163,7 +163,7 @@ public actor BatteryHistory {
             }
             try handle.write(contentsOf: Data((prefix + line + "\n").utf8))
         } catch {
-            log.error("append failed: \(String(describing: error), privacy: .public)")
+            log.error("append failed: \(String(describing: error))")
         }
     }
 
@@ -174,7 +174,7 @@ public actor BatteryHistory {
             try Data(text.utf8).write(to: fileURL, options: .atomic)
             return true
         } catch {
-            log.error("write failed: \(String(describing: error), privacy: .public)")
+            log.error("write failed: \(String(describing: error))")
             return false
         }
     }

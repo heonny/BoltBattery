@@ -2,16 +2,20 @@ import AppKit
 import BatteryHistory
 import Charts
 import Combine
+import Diagnostics
 import HIDPPKit
 import SwiftUI
 
 @main
-struct BoltBatteryApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-
-    var body: some Scene {
-        // 창을 만들지 않는다. 메뉴바 항목과 팝오버는 AppDelegate가 AppKit으로 띄운다.
-        Settings { EmptyView() }
+@MainActor
+enum BoltBatteryApp {
+    static func main() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        // NSApplication keeps a weak delegate; retain it for the entire event loop.
+        withExtendedLifetime(delegate) { app.run() }
     }
 }
 
@@ -20,17 +24,22 @@ struct BoltBatteryApp: App {
 /// (MenuBarExtra .window와 NSPopover는 불투명 재질을 깔고, 직접 만든 투명 패널은 창 그림자가 네모로 비쳤다.)
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let model = BatteryModel()
+    private let settings = AppSettings()
+    private lazy var model = BatteryModel()
+    private lazy var settingsMenu = SettingsMenuController(settings: settings)
     private var statusItem: NSStatusItem?
+    private var mainMenu: NSMenu?
     private var hosting: NSHostingView<PopoverView>?
     private var subscription: AnyCancellable?
+    private var settingsSubscriptions: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DiagnosticFile.shared.setEnabled(settings.fileLogging)
+        DiagnosticLogger(category: "app").info("Application started")
         MouseIcon.dumpPreviewIfRequested()
-        // Info.plist의 LSUIElement와 같은 효과. 번들 없이 swift run으로 띄워도 Dock 아이콘이 생기지 않게 한다.
-        NSApplication.shared.setActivationPolicy(.accessory)
-
-        let hosting = NSHostingView(rootView: PopoverView(model: model))
+        let hosting = NSHostingView(rootView: PopoverView(model: model, openSettings: { [weak self] in
+            self?.showSettings()
+        }))
         hosting.frame.size = hosting.fittingSize
         self.hosting = hosting
 
@@ -39,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.addItem(item)
         menu.delegate = self
+        mainMenu = menu
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.imagePosition = .imageLeading
@@ -49,6 +59,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         subscription = model.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.updateButton() }
         }
+        settings.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.updateButton() }
+        }.store(in: &settingsSubscriptions)
+        settings.$fileLogging.dropFirst().sink { enabled in
+            DiagnosticFile.shared.setEnabled(enabled)
+            DiagnosticLogger(category: "app").info("File logging \(enabled ? "enabled" : "disabled")")
+        }.store(in: &settingsSubscriptions)
         updateButton()
 
         // 스크린샷 확인용: `BoltBattery --debug-panel`로 띄우면 메뉴를 바로 연다.
@@ -59,14 +76,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 메뉴가 열릴 때 내용 크기를 다시 잰다. 열린 동안엔 메뉴가 크기를 바꾸지 않으므로 늘어난 문구는 다음에 열 때 반영된다.
     func menuWillOpen(_ menu: NSMenu) {
+        guard menu === mainMenu else { return }
+        model.refreshNow()
         guard let hosting else { return }
         hosting.frame.size = hosting.fittingSize
     }
 
     private func updateButton() {
         guard let button = statusItem?.button else { return }
-        button.image = MouseIcon.image(for: model.primary)
-        button.title = " " + MenuBarIcon.title(for: model.primary)
+        button.image = settings.displayMode == .percentOnly ? nil : MouseIcon.image(for: model.primary)
+        button.title = settings.displayMode == .iconOnly ? "" :
+            (settings.displayMode == .iconAndPercent ? " " : "") + MenuBarIcon.title(for: model.primary)
+        button.setAccessibilityLabel("Bolt Battery · \(MenuBarIcon.title(for: model.primary))")
+    }
+
+    private func showSettings() {
+        // End the current menu before asking the status item to open its settings menu.
+        statusItem?.menu?.cancelTracking()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let statusItem = self.statusItem, let button = statusItem.button else { return }
+            let menu = self.settingsMenu.makeMenu(
+                launchAtLogin: self.model.launchAtLogin,
+                onLaunchAtLogin: { [weak self] in
+                    guard let self else { return }
+                    self.model.setLaunchAtLogin(!self.model.launchAtLogin)
+                },
+                onRefresh: self.model.refreshNow,
+                onClear: self.model.clearHistory
+            )
+            menu.delegate = self
+            statusItem.menu = menu
+            button.performClick(nil)
+        }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        if menu !== mainMenu { statusItem?.menu = mainMenu }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        DiagnosticLogger(category: "app").info("Application stopped")
+        DiagnosticFile.shared.flush()
     }
 }
 
@@ -79,13 +129,22 @@ enum MenuBarIcon {
 
 struct PopoverView: View {
     @ObservedObject var model: BatteryModel
+    let openSettings: () -> Void
     @State private var range: HistoryRange = .day
-    @State private var confirmingClear = false
-    @State private var hoverLabel: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            DeviceSection(model: model)
+            HStack(alignment: .top, spacing: 8) {
+                DeviceSection(model: model)
+                Button(action: openSettings) {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 14))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("설정")
+            }
             Divider()
             Picker("범위", selection: $range) {
                 ForEach(HistoryRange.allCases) { Text(Self.title(for: $0)).tag($0) }
@@ -97,32 +156,6 @@ struct PopoverView: View {
                 .frame(height: 150)
                 .padding(10)
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-            Divider()
-            HStack(spacing: 4) {
-                IconButton("arrow.clockwise", help: "지금 갱신", hoverLabel: $hoverLabel) { model.refreshNow() }
-                if confirmingClear {
-                    IconButton("checkmark", help: "6개월치 기록을 지웁니다", role: .destructive, hoverLabel: $hoverLabel) {
-                        model.clearHistory()
-                        confirmingClear = false
-                    }
-                    IconButton("xmark", help: "취소", hoverLabel: $hoverLabel) { confirmingClear = false }
-                } else {
-                    IconButton("eraser", help: "기록 지우기", hoverLabel: $hoverLabel) { confirmingClear = true }
-                }
-                Spacer()
-                // 호버 중인 버튼의 설명. 툴팁 상자 대신 늘 같은 자리에 뜬다.
-                Text(hoverLabel ?? "")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-                IconButton("autostartstop", help: model.launchAtLogin ? "로그인 시 실행: 켜짐" : "로그인 시 실행: 꺼짐",
-                           isOn: model.launchAtLogin, hoverLabel: $hoverLabel) {
-                    model.setLaunchAtLogin(!model.launchAtLogin)
-                }
-                IconButton("power", help: "종료", hoverLabel: $hoverLabel) { NSApplication.shared.terminate(nil) }
-                    .keyboardShortcut("q")
-            }
             if let error = model.launchAtLoginError {
                 Text(error).font(.caption).foregroundStyle(.secondary)
             }
@@ -137,71 +170,6 @@ struct PopoverView: View {
         case .week: "일간"
         case .quarter: "주간"
         }
-    }
-}
-
-/// 텍스트 없는 정사각 아이콘 버튼. 평소엔 아이콘만, 마우스를 올리면 옅은 채움이 생기고 설명은 버튼 줄 가운데 `hoverLabel`에 뜬다.
-/// 비활성화 패널에서는 시스템 툴팁(.help)이 뜨지 않는다.
-struct IconButton: View {
-    let symbol: String
-    let help: String
-    var role: ButtonRole?
-    var isOn = false
-    @Binding var hoverLabel: String?
-    let action: () -> Void
-
-    @State private var hovering = false
-
-    init(_ symbol: String, help: String, role: ButtonRole? = nil, isOn: Bool = false,
-         hoverLabel: Binding<String?>, action: @escaping () -> Void) {
-        self.symbol = symbol
-        self.help = help
-        self.role = role
-        self.isOn = isOn
-        _hoverLabel = hoverLabel
-        self.action = action
-    }
-
-    var body: some View {
-        Button(role: role, action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isOn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
-                .frame(width: 28, height: 28)
-        }
-        .buttonStyle(HoverSquareStyle(hovering: hovering, isOn: isOn))
-        .onHover { inside in
-            withAnimation(.easeOut(duration: 0.15)) { hovering = inside }
-            if inside {
-                hoverLabel = help
-            } else if hoverLabel == help {
-                hoverLabel = nil
-            }
-        }
-        .onAppear {
-            // 스크린샷 확인용: BOLT_DEBUG_HOVER=<symbol>이면 그 버튼을 호버 상태로 그린다.
-            if ProcessInfo.processInfo.environment["BOLT_DEBUG_HOVER"] == symbol {
-                hovering = true
-                hoverLabel = help
-            }
-        }
-    }
-}
-
-/// macOS 툴바·Finder의 아이콘 버튼처럼 테두리 없이 옅은 채움만으로 호버와 누름을 표현한다.
-/// 채움은 항상 같은 색이고 불투명도만 바뀐다. 스타일 자체를 갈아끼우면 보간이 안 돼 한 번 번쩍인다.
-/// 켜진 토글은 호버 없이도 상태가 읽히도록 강조색을 옅게 깐다.
-struct HoverSquareStyle: ButtonStyle {
-    let hovering: Bool
-    let isOn: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-        let level: Double = configuration.isPressed ? 0.16 : hovering ? 0.09 : 0
-        configuration.label
-            .background(shape.fill(Color.accentColor).opacity(isOn ? 0.14 : 0))
-            .background(shape.fill(.primary).opacity(level))
-            .contentShape(shape)
     }
 }
 
@@ -245,7 +213,7 @@ struct DeviceSection: View {
 
     static func detail(for device: DeviceStatus) -> String {
         let seen = device.lastUpdated.map { $0.formatted(date: .omitted, time: .shortened) } ?? "없음"
-        return device.isReachable ? "마지막 확인 \(seen)" : "절전 중, 마지막 확인 \(seen)"
+        return device.isReachable ? "마지막 확인 \(seen)" : "응답 없음, 마지막 확인 \(seen)"
     }
 }
 

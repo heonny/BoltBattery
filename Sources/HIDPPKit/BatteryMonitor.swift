@@ -1,5 +1,5 @@
 import Foundation
-import os
+import Diagnostics
 
 public struct DeviceStatus: Equatable, Sendable, Identifiable {
     public let receiverID: UInt64
@@ -36,7 +36,7 @@ public actor BatteryMonitor {
     private var receivers: [Receiver] = []
     private var notificationTasks: [UInt64: Task<Void, Never>] = [:]
     private let onChange: @Sendable ([DeviceStatus]) -> Void
-    private let log = Logger(subsystem: "bolt-battery", category: "battery")
+    private let log = DiagnosticLogger(category: "battery")
 
     public init(onChange: @escaping @Sendable ([DeviceStatus]) -> Void) {
         self.onChange = onChange
@@ -132,7 +132,7 @@ public actor BatteryMonitor {
         guard await isAwake(receiver, slot: slot) else {
             if let i = index(of: key), devices[i].isReachable {
                 devices[i].isReachable = false
-                log.info("\(self.devices[i].name, privacy: .public) stopped responding, keeping last value")
+                log.info("\(self.devices[i].name) stopped responding, keeping last value")
             }
             return
         }
@@ -153,6 +153,7 @@ public actor BatteryMonitor {
         if let battery = await read("battery", slot: slot, { try await receiver.battery(slot: slot) }), let i = index(of: key) {
             devices[i].battery = battery
             devices[i].lastUpdated = Date()
+            log.info("slot \(slot) battery \(battery.percent)% charging=\(battery.isCharging)")
         }
     }
 
@@ -164,14 +165,15 @@ public actor BatteryMonitor {
         await read("ping", slot: slot) { try await receiver.ping(slot: slot) } != nil
     }
 
-    /// 읽기 실패는 "이번엔 못 읽음"이다. 타임아웃은 절전이라 조용히, 그 외는 로그만 남기고 마지막 값을 유지한다.
+    /// 읽기 실패 시 마지막 값을 유지한다. 타임아웃만으로 절전 여부를 판정할 수 없다.
     private func read<T>(_ what: String, slot: UInt8, _ body: () async throws -> T?) async -> T? {
         do {
             return try await body()
         } catch HIDPPError.timeout {
+            log.info("slot \(slot) \(what) timed out, keeping last value")
             return nil
         } catch {
-            log.error("slot \(slot) \(what, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            log.error("slot \(slot) \(what) failed: \(String(describing: error))")
             return nil
         }
     }

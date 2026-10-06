@@ -58,6 +58,32 @@ func hidpp10Error(to frame: [UInt8], code: UInt8) -> [UInt8] {
     [HIDPP.shortReportID, frame[1], 0x8F, frame[2], frame[3], code, 0]
 }
 
+@Test(arguments: [true, false])
+func pingRecoversFromTransientFailure(timeout: Bool) async throws {
+    var attempts = 0
+    let channel = FakeChannel { frame in
+        attempts += 1
+        if attempts == 1 { return timeout ? [] : [hidpp10Error(to: frame, code: 0x07)] }
+        return [longReply(to: frame, [4, 5, frame[6]])]
+    }
+    let receiver = try Receiver(channel: channel, timeout: 0.02)
+    let version = try await receiver.ping(slot: 2)
+    #expect(version?.major == 4)
+    #expect(attempts == 2)
+}
+
+@Test func pingStopsRetryingAndLeavesUnavailableSlotsUnavailable() async throws {
+    let silent = FakeChannel { _ in [] }
+    let receiver = try Receiver(channel: silent, timeout: 0.02)
+    #expect(try await receiver.ping(slot: 2) == nil)
+    #expect(silent.written.count == 3)
+
+    let empty = FakeChannel { [hidpp10Error(to: $0, code: 0x09)] }
+    let emptyReceiver = try Receiver(channel: empty, timeout: 0.02)
+    #expect(try await emptyReceiver.ping(slot: 1) == nil)
+    #expect(empty.written.count == 1)
+}
+
 // MARK: - HIDPPClient
 
 @Test func frameLayoutMatchesSolaarWrite() throws {

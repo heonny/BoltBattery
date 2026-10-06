@@ -1,6 +1,6 @@
 import AppKit
 import IOKit.hid
-import os
+import Diagnostics
 
 /// UI에 보여줄 리시버 쪽 상태. 장치가 없는 것과 열지 못한 것을 구분한다.
 public enum ReceiverState: Sendable, Equatable {
@@ -25,7 +25,7 @@ public final class ReceiverMonitor: @unchecked Sendable {
     /// 매칭됐지만 열지 못한 리시버. `retry()`가 다시 시도한다.
     private var failed: [UInt64: (device: IOHIDDevice, state: ReceiverState)] = [:]
     private var wakeObserver: NSObjectProtocol?
-    private let log = Logger(subsystem: "bolt-battery", category: "hotplug")
+    private let log = DiagnosticLogger(category: "hotplug")
 
     public init() {
         (receivers, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -77,10 +77,10 @@ public final class ReceiverMonitor: @unchecked Sendable {
             let receiver = try openReceiver(for: device)
             open[key] = (device, receiver)
             failed[key] = nil
-            log.info("receiver attached: \(receiver.productName, privacy: .public) \(String(receiver.productID, radix: 16), privacy: .public)")
+            log.info("receiver attached: \(receiver.productName) \(String(receiver.productID, radix: 16))")
         } catch {
             failed[key] = (device, Self.openFailedState(for: error))
-            log.error("receiver open failed: \(String(describing: error), privacy: .public)")
+            log.error("receiver open failed: \(String(describing: error))")
         }
         publish()
     }
@@ -123,7 +123,7 @@ public final class ReceiverMonitor: @unchecked Sendable {
                 do {
                     self.open[key] = (entry.device, try self.openReceiver(for: entry.device))
                 } catch {
-                    self.log.error("keeping previous handle for receiver \(key): \(String(describing: error), privacy: .public)")
+                    self.log.error("keeping previous handle for receiver \(key): \(String(describing: error))")
                 }
             }
             let pending = self.failed

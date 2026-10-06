@@ -1,4 +1,5 @@
 import Foundation
+import Diagnostics
 
 // hidpp20_constants.SupportedFeature
 public enum FeatureID: UInt16, Sendable, CaseIterable {
@@ -34,6 +35,7 @@ public actor Receiver {
     /// 이벤트를 받아볼 기능. 인덱스를 알게 되는 즉시 클라이언트 필터에 등록한다.
     private static let notifiedFeatures: Set<FeatureID> = [.unifiedBattery, .batteryStatus]
     private let client: HIDPPClient
+    private let log = DiagnosticLogger(category: "receiver")
     private var featureIndexCache: [UInt8: [FeatureID: UInt8]] = [:]
 
     /// 연결된 Bolt/Unifying 리시버를 모두 열어 반환한다.
@@ -71,19 +73,22 @@ public actor Receiver {
     }
 
     /// base.py ping(): ROOT fn1 + [0, 0, mark] -> [major, minor, mark]. 빈 슬롯·무응답이면 nil.
-    /// 핑은 생존 확인이라 재시도하지 않는다.
+    /// 사용 중에도 BUSY나 일시적인 응답 누락이 생기므로 다른 조회와 같은 제한된 재시도를 적용한다.
     /// HID++ 1.0 에러는 모두 nil: base.py ping()은 0x08을 빈 슬롯, 0x04/0x09를 응답 불가, 0x01을 HID++ 1.0 장치로 보는데
     /// 이 앱은 2.0 배터리 기능만 읽으므로 셋 다 "읽을 장치 없음"이다. Phase 0 실측: Bolt는 빈 슬롯에도 0x09를 준다.
-    /// ponytail: 핑 중 BUSY(0x07)도 이번 조회에선 건너뛴다. 다음 폴링이 다시 핑한다.
     public func ping(slot: UInt8) async throws -> (major: UInt8, minor: UInt8)? {
         let mark = UInt8.random(in: 0...255)
         do {
-            let r = try await client.request(deviceIndex: slot, feature: 0x00, function: 1, params: [0, 0, mark], attempts: 1)
-            guard r.count >= 3, r[2] == mark else { return nil }
+            let r = try await client.request(deviceIndex: slot, feature: 0x00, function: 1, params: [0, 0, mark])
+            guard r.count >= 3, r[2] == mark else {
+                log.info("slot \(slot) ping reply marker mismatch")
+                return nil
+            }
             return (r[0], r[1])
         } catch HIDPPError.timeout {
             return nil
-        } catch HIDPPError.hidpp10Error {
+        } catch HIDPPError.hidpp10Error(let code) {
+            log.info("slot \(slot) ping unavailable: HID++ 1.0 error \(code)")
             return nil
         }
     }
