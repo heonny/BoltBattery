@@ -270,8 +270,8 @@ struct HistoryChart: View {
     let range: HistoryRange
 
     var body: some View {
-        if points.count < 2 {
-            Text("아직 기록이 충분하지 않습니다")
+        if points.isEmpty {
+            Text("기록 없음")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -287,13 +287,21 @@ struct HistoryChart: View {
                     )
                     .foregroundStyle(Color.green.opacity(0.16))
                 }
-                ForEach(points) { point in
-                    AreaMark(x: .value("시각", point.time), y: .value("배터리", point.percent))
-                        .foregroundStyle(.linearGradient(colors: [Color.accentColor.opacity(0.35), .clear], startPoint: .top, endPoint: .bottom))
-                        .interpolationMethod(.linear)
-                    LineMark(x: .value("시각", point.time), y: .value("배터리", point.percent))
-                        .foregroundStyle(Color.accentColor)
-                        .interpolationMethod(.linear)
+                ForEach(ChartSegment.split(points, range: range)) { segment in
+                    ForEach(segment.points) { point in
+                        AreaMark(x: .value("시각", point.time), y: .value("배터리", point.percent),
+                                 series: .value("기록 구간", segment.id))
+                            .foregroundStyle(.linearGradient(colors: [Color.accentColor.opacity(0.35), .clear], startPoint: .top, endPoint: .bottom))
+                            .interpolationMethod(.linear)
+                        LineMark(x: .value("시각", point.time), y: .value("배터리", point.percent),
+                                 series: .value("기록 구간", segment.id))
+                            .foregroundStyle(Color.accentColor)
+                            .interpolationMethod(.linear)
+                        if segment.points.count == 1 {
+                            PointMark(x: .value("시각", point.time), y: .value("배터리", point.percent))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
                 }
             }
             .chartXScale(domain: start...now)

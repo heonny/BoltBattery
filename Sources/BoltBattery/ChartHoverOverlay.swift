@@ -5,12 +5,16 @@ import SwiftUI
 @MainActor
 final class ChartHoverSelection: ObservableObject {
     @Published private(set) var selected: ChartPoint?
-    func update(_ point: ChartPoint?) {
+    @Published private(set) var missingDate: Date?
+    var hoverDate: Date? { selected?.time ?? missingDate }
+
+    func update(_ point: ChartPoint?, missingDate: Date? = nil) {
+        if self.missingDate != missingDate { self.missingDate = missingDate }
         guard point != selected else { return }
         selected = point
     }
 
-    static func nearest(to date: Date, in points: [ChartPoint]) -> ChartPoint? {
+    static func nearest(to date: Date, in points: [ChartPoint], range: HistoryRange = .day) -> ChartPoint? {
         guard let first = points.first, let last = points.last,
               (first.time...last.time).contains(date) else { return nil }
         var lower = 0
@@ -23,6 +27,8 @@ final class ChartHoverSelection: ObservableObject {
         guard lower > 0 else { return first }
         let before = points[lower - 1]
         let after = points[lower]
+        if date == after.time { return after }
+        guard after.time <= HistoryChart.intervalEnd(for: before.time, range: range) else { return nil }
         return date.timeIntervalSince(before.time) <= after.time.timeIntervalSince(date) ? before : after
     }
 }
@@ -43,16 +49,17 @@ struct ChartHoverOverlay: View {
                         selection.update(nil)
                         return
                     }
-                    selection.update(ChartHoverSelection.nearest(to: date, in: points))
+                    let point = ChartHoverSelection.nearest(to: date, in: points, range: range)
+                    selection.update(point, missingDate: point == nil ? date : nil)
                 }
-                if let point = selection.selected, let x = proxy.position(forX: point.time) {
+                if let date = selection.hoverDate, let x = proxy.position(forX: date) {
                     Path { path in
                         path.move(to: CGPoint(x: plot.minX + x, y: plot.minY))
                         path.addLine(to: CGPoint(x: plot.minX + x, y: plot.maxY))
                     }
                     .stroke(.secondary.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
                     .allowsHitTesting(false)
-                    if let y = proxy.position(forY: point.percent) {
+                    if let point = selection.selected, let y = proxy.position(forY: point.percent) {
                         Circle()
                             .fill(Color.accentColor)
                             .frame(width: 7, height: 7)
@@ -62,7 +69,7 @@ struct ChartHoverOverlay: View {
                     }
                     let pointX = plot.minX + x
                     let preferredX = pointX > plot.midX ? pointX - 144 : pointX + 12
-                    ChartTooltip(point: point, range: range)
+                    ChartTooltip(point: selection.selected, date: date, range: range)
                         .offset(x: min(max(preferredX, plot.minX + 6), max(plot.minX + 6, plot.maxX - 138)),
                                 y: plot.minY + 8)
                         .allowsHitTesting(false)
@@ -76,34 +83,26 @@ struct ChartHoverOverlay: View {
 }
 
 private struct ChartTooltip: View {
-    let point: ChartPoint
+    let point: ChartPoint?
+    let date: Date
     let range: HistoryRange
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(point.time.formatted(.dateTime.month(.twoDigits).day(.twoDigits)))
-                Text(HistoryChart.axisLabel(for: point.time, range: .day) +
-                     (range == .day ? "–" + HistoryChart.axisLabel(for: point.time.addingTimeInterval(540), range: .day) : ""))
+                Text(date.formatted(.dateTime.month(.twoDigits).day(.twoDigits)))
+                Text(HistoryChart.axisLabel(for: date, range: .day) +
+                     (point != nil && range == .day ? "–" + HistoryChart.axisLabel(for: date.addingTimeInterval(540), range: .day) : ""))
             }
             .font(.system(size: 10).monospacedDigit())
             .foregroundStyle(.secondary)
 
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(point.percent.formatted(.number.precision(.fractionLength(0...1))))
-                    .font(.system(size: 23, weight: .semibold, design: .rounded).monospacedDigit())
-                Text("%")
-                    .font(.system(size: 12, weight: .medium))
+            if let point {
+                reading(point)
+            } else {
+                Text("기록 없음")
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                if range != .day {
-                    Text("평균").font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-            if point.isCharging {
-                Label("충전 기록 있음", systemImage: "bolt.fill")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.green)
             }
         }
         .frame(width: 112, alignment: .leading)
@@ -111,6 +110,26 @@ private struct ChartTooltip: View {
         .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.08), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
+    }
+
+    @ViewBuilder
+    private func reading(_ point: ChartPoint) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(point.percent.formatted(.number.precision(.fractionLength(0...1))))
+                .font(.system(size: 23, weight: .semibold, design: .rounded).monospacedDigit())
+            Text("%")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            if range != .day {
+                Text("평균").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        if point.isCharging {
+            Label("충전 기록 있음", systemImage: "bolt.fill")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.green)
+        }
     }
 }
 
