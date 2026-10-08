@@ -335,6 +335,15 @@ struct HistoryChart: View {
         }
     }
 
+    /// 폴링 간격은 tolerance를 포함하면 10분 구간보다 길어(`BatteryModel.pollInterval` + `pollTolerance`) 정상 응답 중에도 구간 하나를 건너뛴다.
+    /// 시간별 차트는 한 구간 누락까지 이어 그리고 그보다 긴 공백만 기록 없음으로 본다.
+    static func connects(_ before: Date, _ after: Date, range: HistoryRange) -> Bool {
+        switch range {
+        case .day: after.timeIntervalSince(before) <= 2 * BatteryHistory.recordingInterval
+        case .week, .quarter: after <= intervalEnd(for: before, range: range)
+        }
+    }
+
     static func axisLabel(for date: Date, range: HistoryRange, timeZone: TimeZone = .current) -> String {
         switch range {
         case .day:

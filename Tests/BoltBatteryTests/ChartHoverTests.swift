@@ -64,6 +64,17 @@ private func hoverPoints() -> [ChartPoint] {
     #expect(ChartSegment.split([points[0]], range: .day).first?.points == [points[0]])
 }
 
+@Test @MainActor func hourlyChartBridgesOneIntervalSkippedByPollingJitter() {
+    let longestPoll = (BatteryModel.pollInterval + BatteryModel.pollTolerance).components.seconds
+    #expect(Double(longestPoll) < 2 * BatteryHistory.recordingInterval)
+    let points = BatteryHistory.points([600.0, 1800, 2400, 4200].map {
+        BatterySample(time: Date(timeIntervalSince1970: $0), slot: 1, percent: 85, isCharging: false)
+    }, slot: 1, range: .day, now: Date(timeIntervalSince1970: 4200))
+    #expect(ChartSegment.split(points, range: .day).map { $0.points.count } == [3, 1])
+    #expect(ChartHoverSelection.nearest(to: Date(timeIntervalSince1970: 1200), in: points) == points[0])
+    #expect(ChartHoverSelection.nearest(to: Date(timeIntervalSince1970: 3300), in: points) == nil)
+}
+
 @Test @MainActor func aggregatedChartsKeepAdjacentBucketsAndBreakAtMissingBuckets() {
     for range in [HistoryRange.week, .quarter] {
         let unit: Calendar.Component = range == .week ? .hour : .day

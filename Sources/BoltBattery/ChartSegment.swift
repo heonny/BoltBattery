@@ -10,7 +10,7 @@ struct ChartSegment: Identifiable {
         var segments: [ChartSegment] = []
         for point in points {
             if let previous = segments.last?.points.last,
-               point.time <= HistoryChart.intervalEnd(for: previous.time, range: range) {
+               HistoryChart.connects(previous.time, point.time, range: range) {
                 segments[segments.count - 1].points.append(point)
             } else {
                 segments.append(ChartSegment(id: point.time, points: [point]))

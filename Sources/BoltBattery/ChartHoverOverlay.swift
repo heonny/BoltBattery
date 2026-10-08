@@ -28,7 +28,7 @@ final class ChartHoverSelection: ObservableObject {
         let before = points[lower - 1]
         let after = points[lower]
         if date == after.time { return after }
-        guard after.time <= HistoryChart.intervalEnd(for: before.time, range: range) else { return nil }
+        guard HistoryChart.connects(before.time, after.time, range: range) else { return nil }
         return date.timeIntervalSince(before.time) <= after.time.timeIntervalSince(date) ? before : after
     }
 }
