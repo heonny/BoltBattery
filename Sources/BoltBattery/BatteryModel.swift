@@ -73,9 +73,10 @@ final class BatteryModel: ObservableObject {
         if recorded { samples = await history.samples }
     }
 
-    /// 표시 중인 장치가 없으면 빈 차트. 슬롯을 합치면 같은 시각의 점이 겹쳐 ID가 충돌한다.
+    /// 리시버가 빠져 표시 장치가 없어도 지난 기록은 보여주도록 마지막으로 기록된 슬롯을 쓴다.
+    /// 슬롯을 합치면 같은 시각의 점이 겹쳐 ID가 충돌한다.
     func chartPoints(_ range: HistoryRange) -> [ChartPoint] {
-        guard let slot = primary?.slot else { return [] }
+        guard let slot = primary?.slot ?? samples.last?.slot else { return [] }
         return BatteryHistory.points(samples, slot: slot, range: range)
     }
 
