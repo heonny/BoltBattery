@@ -14,7 +14,7 @@ let t0 = Date(timeIntervalSince1970: 1_700_000_000)
         BatterySample(time: t0, slot: 2, percent: 86, isCharging: false),
         BatterySample(time: t0 + 10, slot: 2, percent: 87, isCharging: true),
     ]
-    let points = BatteryHistory.points(samples, slot: 2, range: .day, now: t0 + 20)
+    let points = BatteryHistory.points(samples, slot: 2, range: .hourly, now: t0 + 20)
     #expect(points.map(\.time) == [BatteryHistory.intervalStart(t0)])
     #expect(points.map(\.percent) == [87])
     #expect(points.last?.isCharging == true)
@@ -85,6 +85,13 @@ let t0 = Date(timeIntervalSince1970: 1_700_000_000)
     await history.clear()
 }
 
+private var seoul: Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "Asia/Seoul")!
+    calendar.firstWeekday = 1
+    return calendar
+}
+
 @Test func pointsBucketAverageAndFlagCharging() {
     let samples = [
         BatterySample(time: t0, slot: 2, percent: 90, isCharging: false),
@@ -94,22 +101,46 @@ let t0 = Date(timeIntervalSince1970: 1_700_000_000)
         BatterySample(time: t0 - 8 * 86_400, slot: 2, percent: 5, isCharging: false),
     ]
     let now = t0 + 7_200
-    let raw = BatteryHistory.points(samples, slot: 2, range: .day, now: now)
+    let raw = BatteryHistory.points(samples, slot: 2, range: .hourly, now: now, calendar: seoul)
     #expect(raw.map(\.percent) == [90, 80, 70])
 
-    let hourly = BatteryHistory.points(samples, slot: 2, range: .week, now: now)
-    #expect(hourly.map(\.percent) == [85, 70])
-    #expect(hourly.map(\.isCharging) == [true, false])
-    #expect(hourly[0].time == Date(timeIntervalSince1970: floor(t0.timeIntervalSince1970 / 3_600) * 3_600))
+    let daily = BatteryHistory.points(samples, slot: 2, range: .daily, now: now, calendar: seoul)
+    #expect(daily.map(\.percent) == [5, 80])
+    #expect(daily.map(\.isCharging) == [false, true])
+    #expect(daily[1].time == seoul.startOfDay(for: t0))
 
-    // 8일 전 샘플도 12주 범위에 들어와 일 단위 버킷이 둘이다. 슬롯을 지정하지 않으면 두 슬롯이 합쳐진다.
-    let quarter = BatteryHistory.points(samples, slot: nil, range: .quarter, now: now)
-    #expect(quarter.map(\.percent) == [5, 62.5])
+    // 슬롯을 지정하지 않으면 두 슬롯이 합쳐진다.
+    let weekly = BatteryHistory.points(samples, slot: nil, range: .weekly, now: now, calendar: seoul)
+    #expect(weekly.map(\.percent) == [5, 62.5])
+    #expect(weekly[1].time == seoul.dateInterval(of: .weekOfYear, for: t0)?.start)
+}
+
+@Test func barRangesCoverWholeBucketsWithinRetention() {
+    for day in 0..<14 {
+        let now = t0 + Double(day) * 86_400
+        let daily = HistoryRange.daily.domain(now: now, calendar: seoul)
+        #expect(daily.lowerBound == seoul.date(byAdding: .day, value: -29, to: seoul.startOfDay(for: now)))
+        #expect(daily.upperBound == seoul.date(byAdding: .day, value: 1, to: seoul.startOfDay(for: now)))
+        let weekly = HistoryRange.weekly.domain(now: now, calendar: seoul)
+        #expect(seoul.dateComponents([.weekOfYear], from: weekly.lowerBound, to: weekly.upperBound).weekOfYear == 26)
+        #expect(weekly.lowerBound >= now.addingTimeInterval(-BatteryHistory.retention))
+    }
+}
+
+@Test func barAxisTicksAreSparseAndEndAtCurrentBucket() {
+    #expect(HistoryRange.hourly.axisTicks(now: t0, calendar: seoul) == nil)
+    for range in [HistoryRange.daily, .weekly] {
+        let domain = range.domain(now: t0, calendar: seoul)
+        let ticks = range.axisTicks(now: t0, calendar: seoul) ?? []
+        #expect(ticks.count == 3)
+        #expect(ticks.allSatisfy(domain.contains))
+        #expect(ticks.last == seoul.dateInterval(of: range.bucket!, for: t0)?.start)
+        let span = domain.upperBound.timeIntervalSince(domain.lowerBound)
+        #expect(zip(ticks, ticks.dropFirst()).allSatisfy { $1.timeIntervalSince($0) >= span / 4 })
+    }
 }
 
 @Test func dailyBucketsCutAtLocalMidnight() {
-    var seoul = Calendar(identifier: .gregorian)
-    seoul.timeZone = TimeZone(identifier: "Asia/Seoul")!
     // 2023-11-15 07:13 KST (= 14일 22:13 UTC)와 같은 날 10:13 KST. UTC 기준이면 다른 날, 서울 기준이면 같은 날.
     let morning = Date(timeIntervalSince1970: 1_700_000_000)
     let later = morning.addingTimeInterval(3 * 3_600)
@@ -117,7 +148,7 @@ let t0 = Date(timeIntervalSince1970: 1_700_000_000)
         BatterySample(time: morning, slot: 2, percent: 80, isCharging: false),
         BatterySample(time: later, slot: 2, percent: 60, isCharging: false),
     ]
-    let points = BatteryHistory.points(samples, slot: 2, range: .quarter, now: later, calendar: seoul)
+    let points = BatteryHistory.points(samples, slot: 2, range: .daily, now: later, calendar: seoul)
     #expect(points.map(\.percent) == [70])
     #expect(points[0].time == seoul.startOfDay(for: morning))
 }
@@ -177,7 +208,7 @@ let t0 = Date(timeIntervalSince1970: 1_700_000_000)
     await history.load(now: start + 700)
     #expect(await history.samples.map(\.percent) == [80, 90])
     #expect(await history.samples.first?.isCharging == true)
-    let points = BatteryHistory.points(samples, slot: 2, range: .week, now: start + 700)
+    let points = BatteryHistory.points(samples, slot: 2, range: .daily, now: start + 700, calendar: seoul)
     #expect(points.first?.percent == 85)
     #expect(try String(contentsOf: url, encoding: .utf8).split(separator: "\n").count == 2)
 }
@@ -189,6 +220,6 @@ let t0 = Date(timeIntervalSince1970: 1_700_000_000)
         BatterySample(time: now - 12 * 3_600, slot: 2, percent: 85, isCharging: false),
         BatterySample(time: now, slot: 2, percent: 80, isCharging: false),
     ]
-    #expect(HistoryRange.day.window == 12 * 3_600)
-    #expect(BatteryHistory.points(samples, slot: 2, range: .day, now: now).map(\.percent) == [85, 80])
+    #expect(HistoryRange.hourly.domain(now: now) == now.addingTimeInterval(-12 * 3_600)...now)
+    #expect(BatteryHistory.points(samples, slot: 2, range: .hourly, now: now).map(\.percent) == [85, 80])
 }

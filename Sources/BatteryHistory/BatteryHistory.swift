@@ -17,29 +17,42 @@ public struct BatterySample: Equatable, Sendable {
 
 public enum HistoryRange: CaseIterable, Sendable, Identifiable {
     /// 최근 12시간, 10분 구간별 마지막 값
-    case day
-    /// 최근 7일, 시간 평균
-    case week
-    /// 최근 12주, 일 평균
-    case quarter
+    case hourly
+    /// 오늘을 포함한 최근 30일, 일 평균
+    case daily
+    /// 이번 주를 포함한 최근 26주, 주 평균. 26주는 첫 주의 시작이 183일 보존 기간 안에 들어가는 최대 개수다.
+    case weekly
 
     public var id: Self { self }
 
-    public var window: TimeInterval {
+    /// 묶는 단위. 로컬 달력 기준이라 현지 자정에서 끊기고 서머타임도 맞으며, 주의 시작 요일도 달력 설정을 따른다.
+    public var bucket: Calendar.Component? {
         switch self {
-        case .day: 12 * 3_600
-        case .week: 7 * 86_400
-        case .quarter: 84 * 86_400
+        case .hourly: nil
+        case .daily: .day
+        case .weekly: .weekOfYear
         }
     }
 
-    /// 묶는 단위. 로컬 달력 기준이라 일 단위는 현지 자정에서 끊기고 서머타임도 맞는다.
-    var bucket: Calendar.Component? {
+    /// 차트 x축 범위. 집계 범위는 진행 중인 구간의 끝까지 덮어 막대가 모두 같은 폭으로 그려진다.
+    public func domain(now: Date, calendar: Calendar = .current) -> ClosedRange<Date> {
+        let count: Int
         switch self {
-        case .day: nil
-        case .week: .hour
-        case .quarter: .day
+        case .hourly: return now.addingTimeInterval(-12 * 3_600)...now
+        case .daily: count = 30
+        case .weekly: count = 26
         }
+        guard let unit = bucket, let current = calendar.dateInterval(of: unit, for: now),
+              let first = calendar.date(byAdding: unit, value: 1 - count, to: current.start)
+        else { return now...now }
+        return first...current.end
+    }
+
+    /// 막대 차트의 x축 눈금. 자동 눈금은 30일 범위에 주 단위 눈금 5개를 골라 라벨이 겹치므로,
+    /// 진행 중인 구간부터 10구간 간격으로 3개를 거슬러 올라가 오늘·이번 주를 항상 표시한다. 시간별은 nil이며 자동 눈금을 쓴다.
+    public func axisTicks(now: Date, calendar: Calendar = .current) -> [Date]? {
+        guard let unit = bucket, let current = calendar.dateInterval(of: unit, for: now)?.start else { return nil }
+        return [-20, -10, 0].compactMap { calendar.date(byAdding: unit, value: $0, to: current) }
     }
 }
 
@@ -159,7 +172,7 @@ public actor BatteryHistory {
     public static func points(
         _ samples: [BatterySample], slot: UInt8?, range: HistoryRange, now: Date = Date(), calendar: Calendar = .current
     ) -> [ChartPoint] {
-        let start = now.addingTimeInterval(-range.window)
+        let start = range.domain(now: now, calendar: calendar).lowerBound
         let inRange = coalesced(samples).filter { $0.time >= intervalStart(start) && $0.time <= now && (slot == nil || $0.slot == slot) }
         guard let unit = range.bucket else {
             // CSV timestamps have second precision, so separate readings can share a chart identity after reload.

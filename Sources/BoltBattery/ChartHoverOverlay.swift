@@ -14,21 +14,23 @@ final class ChartHoverSelection: ObservableObject {
         selected = point
     }
 
-    static func nearest(to date: Date, in points: [ChartPoint], range: HistoryRange = .day) -> ChartPoint? {
-        guard let first = points.first, let last = points.last,
-              (first.time...last.time).contains(date) else { return nil }
+    /// 막대 차트는 커서가 놓인 구간의 기록을, 시간별 차트는 이어진 두 기록 중 가까운 쪽을 고른다.
+    static func nearest(to date: Date, in points: [ChartPoint], range: HistoryRange = .hourly) -> ChartPoint? {
         var lower = 0
         var upper = points.count
         while lower < upper {
             let middle = (lower + upper) / 2
-            if points[middle].time < date { lower = middle + 1 }
+            if points[middle].time <= date { lower = middle + 1 }
             else { upper = middle }
         }
-        guard lower > 0 else { return first }
+        guard lower > 0 else { return nil }
         let before = points[lower - 1]
+        if range.bucket != nil {
+            return date < HistoryChart.intervalEnd(for: before.time, range: range) ? before : nil
+        }
+        if date == before.time { return before }
+        guard lower < points.count, HistoryChart.connects(before.time, points[lower].time) else { return nil }
         let after = points[lower]
-        if date == after.time { return after }
-        guard HistoryChart.connects(before.time, after.time, range: range) else { return nil }
         return date.timeIntervalSince(before.time) <= after.time.timeIntervalSince(date) ? before : after
     }
 }
@@ -52,7 +54,7 @@ struct ChartHoverOverlay: View {
                     let point = ChartHoverSelection.nearest(to: date, in: points, range: range)
                     selection.update(point, missingDate: point == nil ? date : nil)
                 }
-                if let date = selection.hoverDate, let x = proxy.position(forX: date) {
+                if let date = selection.hoverDate, let x = proxy.position(forX: markerDate(for: date)) {
                     Path { path in
                         path.move(to: CGPoint(x: plot.minX + x, y: plot.minY))
                         path.addLine(to: CGPoint(x: plot.minX + x, y: plot.maxY))
@@ -80,6 +82,11 @@ struct ChartHoverOverlay: View {
         .onChange(of: range) { _ in selection.update(nil) }
         .onDisappear { selection.update(nil) }
     }
+
+    private func markerDate(for date: Date) -> Date {
+        guard range.bucket != nil, selection.selected != nil else { return date }
+        return date.addingTimeInterval(HistoryChart.intervalEnd(for: date, range: range).timeIntervalSince(date) / 2)
+    }
 }
 
 private struct ChartTooltip: View {
@@ -90,9 +97,7 @@ private struct ChartTooltip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(date.formatted(.dateTime.month(.twoDigits).day(.twoDigits)))
-                Text(HistoryChart.axisLabel(for: date, range: .day) +
-                     (point != nil && range == .day ? "–" + HistoryChart.axisLabel(for: date.addingTimeInterval(540), range: .day) : ""))
+                ForEach(periodLines, id: \.self) { Text($0) }
             }
             .font(.system(size: 10).monospacedDigit())
             .foregroundStyle(.secondary)
@@ -112,6 +117,16 @@ private struct ChartTooltip: View {
         .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
     }
 
+    private var periodLines: [String] {
+        let day = Date.FormatStyle.dateTime.month(.twoDigits).day(.twoDigits)
+        guard let unit = range.bucket, let period = Calendar.current.dateInterval(of: unit, for: date) else {
+            return [date.formatted(day), HistoryChart.axisLabel(for: date, range: .hourly) +
+                    (point != nil ? "–" + HistoryChart.axisLabel(for: date.addingTimeInterval(540), range: .hourly) : "")]
+        }
+        if range == .daily { return [period.start.formatted(day.weekday(.abbreviated))] }
+        return [period.start.formatted(day) + "–" + period.end.addingTimeInterval(-1).formatted(day)]
+    }
+
     @ViewBuilder
     private func reading(_ point: ChartPoint) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
@@ -121,7 +136,7 @@ private struct ChartTooltip: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
-            if range != .day {
+            if range != .hourly {
                 Text("평균").font(.caption2).foregroundStyle(.secondary)
             }
         }

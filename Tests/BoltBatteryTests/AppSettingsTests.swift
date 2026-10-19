@@ -7,7 +7,7 @@ import Testing
     let utc = TimeZone(secondsFromGMT: 0)!
     for (hour, expected) in [(0, "00:00"), (1, "01:00"), (13, "13:00"), (23, "23:00")] {
         let date = Date(timeIntervalSince1970: Double(hour * 3600))
-        #expect(HistoryChart.axisLabel(for: date, range: .day, timeZone: utc) == expected)
+        #expect(HistoryChart.axisLabel(for: date, range: .hourly, timeZone: utc) == expected)
     }
 }
 

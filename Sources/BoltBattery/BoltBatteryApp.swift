@@ -176,7 +176,7 @@ enum MenuBarIcon {
 struct PopoverView: View {
     @ObservedObject var model: BatteryModel
     let openSettings: () -> Void
-    @State private var range: HistoryRange = .day
+    @State private var range: HistoryRange = .hourly
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -212,9 +212,9 @@ struct PopoverView: View {
 
     static func title(for range: HistoryRange) -> String {
         switch range {
-        case .day: "시간별"
-        case .week: "일간"
-        case .quarter: "주간"
+        case .hourly: "시간별"
+        case .daily: "일간"
+        case .weekly: "주간"
         }
     }
 }
@@ -277,34 +277,26 @@ struct HistoryChart: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             let now = Date()
-            let start = now.addingTimeInterval(-range.window)
+            let domain = range.domain(now: now)
             Chart {
                 ForEach(points.filter(\.isCharging)) { point in
                     RectangleMark(
-                        xStart: .value("충전 시작", max(start, point.time)),
-                        xEnd: .value("충전 끝", min(now, Self.intervalEnd(for: point.time, range: range))),
+                        xStart: .value("충전 시작", max(domain.lowerBound, point.time)),
+                        xEnd: .value("충전 끝", min(domain.upperBound, Self.intervalEnd(for: point.time, range: range))),
                         yStart: .value("최소", 0), yEnd: .value("최대", 100)
                     )
                     .foregroundStyle(Color.green.opacity(0.16))
                 }
-                ForEach(ChartSegment.split(points, range: range)) { segment in
-                    ForEach(segment.points) { point in
-                        AreaMark(x: .value("시각", point.time), y: .value("배터리", point.percent),
-                                 series: .value("기록 구간", segment.id))
-                            .foregroundStyle(.linearGradient(colors: [Color.accentColor.opacity(0.35), .clear], startPoint: .top, endPoint: .bottom))
-                            .interpolationMethod(.linear)
-                        LineMark(x: .value("시각", point.time), y: .value("배터리", point.percent),
-                                 series: .value("기록 구간", segment.id))
-                            .foregroundStyle(Color.accentColor)
-                            .interpolationMethod(.linear)
-                        if segment.points.count == 1 {
-                            PointMark(x: .value("시각", point.time), y: .value("배터리", point.percent))
-                                .foregroundStyle(Color.accentColor)
-                        }
+                if let unit = range.bucket {
+                    ForEach(points) { point in
+                        BarMark(x: .value("시각", point.time, unit: unit), y: .value("배터리", point.percent))
+                            .foregroundStyle(Color.accentColor.gradient)
                     }
+                } else {
+                    lineSegments
                 }
             }
-            .chartXScale(domain: start...now)
+            .chartXScale(domain: domain)
             .chartYScale(domain: 0...100)
             .chartPlotStyle { plot in plot.clipped() }
             .chartOverlay { proxy in
@@ -312,46 +304,67 @@ struct HistoryChart: View {
             }
             .chartYAxis { AxisMarks(values: [0, 50, 100]) }
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 4)) { value in
-                    if let date = value.as(Date.self), (start...now).contains(date) {
-                        AxisGridLine()
-                        AxisValueLabel(centered: false, anchor: date > now.addingTimeInterval(-range.window / 8) ? .topTrailing :
-                            date < start.addingTimeInterval(range.window / 8) ? .topLeading : .top) {
-                            Text(Self.axisLabel(for: date, range: range))
-                                .monospacedDigit()
-                                .fixedSize()
-                        }
-                    }
+                if let ticks = range.axisTicks(now: now) {
+                    AxisMarks(values: ticks) { axisMark($0, domain: domain) }
+                } else {
+                    AxisMarks(values: .automatic(desiredCount: 4)) { axisMark($0, domain: domain) }
+                }
+            }
+        }
+    }
+
+    @AxisMarkBuilder
+    private func axisMark(_ value: AxisValue, domain: ClosedRange<Date>) -> some AxisMark {
+        let edge = domain.upperBound.timeIntervalSince(domain.lowerBound) / 8
+        if let date = value.as(Date.self), domain.contains(date) {
+            AxisGridLine()
+            AxisValueLabel(centered: false, anchor: date > domain.upperBound.addingTimeInterval(-edge) ? .topTrailing :
+                date < domain.lowerBound.addingTimeInterval(edge) ? .topLeading : .top) {
+                Text(Self.axisLabel(for: date, range: range))
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+        }
+    }
+
+    @ChartContentBuilder
+    private var lineSegments: some ChartContent {
+        ForEach(ChartSegment.split(points)) { segment in
+            ForEach(segment.points) { point in
+                AreaMark(x: .value("시각", point.time), y: .value("배터리", point.percent),
+                         series: .value("기록 구간", segment.id))
+                    .foregroundStyle(.linearGradient(colors: [Color.accentColor.opacity(0.35), .clear], startPoint: .top, endPoint: .bottom))
+                    .interpolationMethod(.linear)
+                LineMark(x: .value("시각", point.time), y: .value("배터리", point.percent),
+                         series: .value("기록 구간", segment.id))
+                    .foregroundStyle(Color.accentColor)
+                    .interpolationMethod(.linear)
+                if segment.points.count == 1 {
+                    PointMark(x: .value("시각", point.time), y: .value("배터리", point.percent))
+                        .foregroundStyle(Color.accentColor)
                 }
             }
         }
     }
 
     static func intervalEnd(for date: Date, range: HistoryRange) -> Date {
-        switch range {
-        case .day: date.addingTimeInterval(BatteryHistory.recordingInterval)
-        case .week: date.addingTimeInterval(3_600)
-        case .quarter: Calendar.current.date(byAdding: .day, value: 1, to: date) ?? date.addingTimeInterval(86_400)
-        }
+        guard let unit = range.bucket else { return date.addingTimeInterval(BatteryHistory.recordingInterval) }
+        return Calendar.current.date(byAdding: unit, value: 1, to: date) ?? date
     }
 
     /// 폴링 간격은 tolerance를 포함하면 10분 구간보다 길어(`BatteryModel.pollInterval` + `pollTolerance`) 정상 응답 중에도 구간 하나를 건너뛴다.
     /// 시간별 차트는 한 구간 누락까지 이어 그리고 그보다 긴 공백만 기록 없음으로 본다.
-    static func connects(_ before: Date, _ after: Date, range: HistoryRange) -> Bool {
-        switch range {
-        case .day: after.timeIntervalSince(before) <= 2 * BatteryHistory.recordingInterval
-        case .week, .quarter: after <= intervalEnd(for: before, range: range)
-        }
+    static func connects(_ before: Date, _ after: Date) -> Bool {
+        after.timeIntervalSince(before) <= 2 * BatteryHistory.recordingInterval
     }
 
     static func axisLabel(for date: Date, range: HistoryRange, timeZone: TimeZone = .current) -> String {
         switch range {
-        case .day:
+        case .hourly:
             date.formatted(Date.VerbatimFormatStyle(
                 format: "\(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)",
                 timeZone: timeZone, calendar: Calendar(identifier: .gregorian)))
-        case .week: date.formatted(.dateTime.weekday(.abbreviated))
-        case .quarter: date.formatted(.dateTime.month(.abbreviated).day())
+        case .daily, .weekly: date.formatted(.dateTime.month(.abbreviated).day())
         }
     }
 }
