@@ -9,13 +9,13 @@ enum MouseIcon {
     static func dumpPreviewIfRequested() {
         #if DEBUG
         guard let path = ProcessInfo.processInfo.environment["BOLT_DEBUG_ICON"] else { return }
-        var states: [DeviceStatus?] = [nil] + [(0, false), (9, false), (10, false), (29, false), (30, false), (85, false), (99, false), (100, false), (60, true)].map {
+        var states: [DeviceStatus?] = [nil] + [(0, false), (9, false), (10, false), (49, false), (50, false), (85, false), (99, false), (100, false), (60, true)].map {
             DeviceStatus(receiverID: 0, slot: 2, name: "", battery: BatteryReading(percent: $0.0, isCharging: $0.1, isApproximate: false),
                          lastUpdated: nil, isReachable: true)
         }
         states.append(DeviceStatus(receiverID: 0, slot: 2, name: "", battery: BatteryReading(percent: 85, isCharging: false, isApproximate: false),
                                    lastUpdated: nil, isReachable: false))
-        let labels = ["None", "0%", "9%", "10%", "29%", "30%", "85%", "99%", "100%", "Charging", "Sleeping"]
+        let labels = ["None", "0%", "9%", "10%", "49%", "50%", "85%", "99%", "100%", "Charging", "Sleeping"]
         let cellWidth: CGFloat = 88
         let rowHeight: CGFloat = 112
         let sheet = NSImage(size: NSSize(width: cellWidth * CGFloat(states.count), height: rowHeight * 4))
@@ -48,13 +48,16 @@ enum MouseIcon {
         #endif
     }
 
+    /// systemYellow 대신 macOS 메모 앱 아이콘 상단과 비슷한 노랑이다.
+    private static let lowBatteryYellow = NSColor(srgbRed: 254 / 255, green: 215 / 255, blue: 82 / 255, alpha: 1)
+
     /// 기본색은 템플릿으로 남겨 밝은 메뉴바에서도 대비를 유지한다.
     static func image(for device: DeviceStatus?) -> NSImage {
         let battery = device?.battery
         let color: NSColor? = switch battery {
         case let b? where b.isCharging: .systemGreen
         case let b? where b.percent < 10: .systemRed
-        case let b? where b.percent < 30: .systemYellow
+        case let b? where b.percent < 50: lowBatteryYellow
         default: nil
         }
         let dimmed = device == nil || device?.isReachable == false
